@@ -166,53 +166,44 @@ export class DriverAlreadyExistsException extends CustomBaseException {
 **src/common/filters/http-exception.filter.ts**
 
 ```ts
-import {
-  ExceptionFilter,
-  Catch,
-  ArgumentsHost,
-  HttpException,
-  HttpStatus,
-  Logger,
-} from '@nestjs/common';
-import { Request, Response } from 'express';
+import { Catch, ExceptionFilter, ArgumentsHost, HttpException, Logger } from "@nestjs/common";
+import { Response, Request } from "express";
 
-@Catch() // Catches all exceptions (like @RestControllerAdvice)
+
+@Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
+
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
-  catch(exception: unknown, host: ArgumentsHost) {
+  catch(exception: HttpException, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
 
-    let status = HttpStatus.INTERNAL_SERVER_ERROR;
-    let message: string | string[] = 'Internal server error';
-    let errorResponse: any;
+    const status = exception.getStatus();
+    const exceptionResponse = exception.getResponse();
 
-    if (exception instanceof HttpException) {
-      status = exception.getStatus();
-      const exceptionResponse = exception.getResponse();
-      
-      // Handle custom exception format
-      if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
-        errorResponse = exceptionResponse;
-        message = (exceptionResponse as any).error?.message || 
-                  (exceptionResponse as any).message || 
-                  message;
-      } else {
-        message = exceptionResponse as string;
-      }
-    } else if (exception instanceof Error) {
-      message = exception.message;
-      this.logger.error(`Unhandled error: ${exception.message}`, exception.stack);
+    let message: string | string[] = "Internal Server Error";
+    let errorResponse: Record<string, unknown> | undefined;
+
+    // custom exception handling
+    if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+      errorResponse = exceptionResponse as Record<string, unknown>;
+      const respMessage = (errorResponse as { message?: string | string[] }).message;
+      message = respMessage || message;
+    } else if (typeof exceptionResponse === 'string') {
+      message = exceptionResponse;
+    } else if(exception instanceof Error) {
+        message = exception.message;
+        this.logger.error(`Unhandled error: ${exception.message}`, exception.stack);
     }
 
-    // Log the error
+    const messageStr = Array.isArray(message) ? message.join(', ') : message;
+
     this.logger.error(
-      `${request.method} ${request.url} - Status: ${status} - Message: ${message}`,
+      `${request.method} ${request.url} - Status: ${status} - Message: ${messageStr}`,
     );
 
-    // Send formatted response
     response.status(status).json(
       errorResponse || {
         success: false,
@@ -220,9 +211,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           statusCode: status,
           message,
           timestamp: new Date().toISOString(),
-          path: request.url,
-        },
-      },
+          path: request.url
+        }
+      }
     );
   }
 }
