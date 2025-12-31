@@ -144,7 +144,7 @@ export const CurrentUser = createParamDecorator(
 
 ```
 
-## Step 4: JWT Strategies
+## Step 4: JWT Strategies & Guards
 
 Validates the user.
 
@@ -241,6 +241,28 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
 
 ```
 
+**src/auth/guards/customer.guard.ts**
+
+```ts
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+@Injectable()
+export class JwtCustomerGuard extends AuthGuard('jwt-customer') {}
+
+```
+**src/auth/guards/driver.guard.ts**
+
+```ts
+
+import { Injectable } from '@nestjs/common';
+import { AuthGuard } from '@nestjs/passport';
+
+@Injectable()
+export class JwtDriverGuard extends AuthGuard('jwt-driver') {}
+
+```
+
 ### Key points
 
 1. any type should be changed to a proper payload type.
@@ -272,7 +294,7 @@ export interface AuthenticatedUser {
 
 **src/auth/dto/auth-response.dto.ts**
 
-*NOTE*: The UserResponseDTO and AuthResponseDTO can be separate files.
+*NOTE*: The UserResponseDTO and AuthResponseDTO can be in separate files.
 
 ```ts
 
@@ -592,6 +614,70 @@ export class AuthController {
 }
 
 ```
+
+### Why No @UseGuards on Auth Controller?
+
+**Important Distinction:**
+
+- **`@UseInterceptors(ClassSerializerInterceptor)`** - Used for serializing response data (e.g., excluding password fields from responses)
+- **`@UseGuards(JwtCustomerGuard)`** - Used for protecting routes that require authentication
+
+**Authentication vs Authorization:**
+
+The auth controller endpoints (register/login) are **public endpoints** - they don't require authentication because:
+- `/auth/customer/register` - Anyone can register (you can't be logged in to create an account)
+- `/auth/customer/login` - Anyone can login (you can't be logged in to login)
+- `/auth/driver/register` - Anyone can register as a driver
+- `/auth/driver/login` - Anyone can login as a driver
+
+**Where to Use Guards:**
+
+Guards are used on **protected endpoints** that require the user to be authenticated:
+
+```ts
+import { Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { JwtCustomerGuard } from '../auth/guards/jwt-customer.guard';
+import { CurrentUser } from '../auth/decorators/current-user.decorator';
+
+@Controller('customers')
+@UseGuards(JwtCustomerGuard) // All routes in this controller require authentication
+export class CustomersController {
+  
+  @Get('profile')
+  async getProfile(@CurrentUser() user) {
+    // Only authenticated customers can access this
+    return user;
+  }
+
+  @Patch('profile')
+  async updateProfile(@CurrentUser() user, @Body() updateDto) {
+    // Only authenticated customers can update their profile
+    return this.customersService.update(user.id, updateDto);
+  }
+}
+```
+
+**ClassSerializerInterceptor Purpose:**
+
+It transforms the response and excludes fields marked with `@Exclude()` decorator (like passwords):
+
+```ts
+export class CustomerResponseDto {
+  @Expose()
+  id: string;
+
+  @Expose()
+  email: string;
+
+  @Exclude() // This field won't be sent in the response
+  password: string;
+}
+```
+
+**Summary:**
+- Auth controller: `@UseInterceptors` ✓, `@UseGuards` ✗ (public endpoints)
+- Protected controllers: `@UseGuards` ✓ (requires authentication)
+- Both can be used together when needed
 
 ## Step 6: Update the Modules
 
