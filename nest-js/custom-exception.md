@@ -170,7 +170,7 @@ import { Catch, ExceptionFilter, ArgumentsHost, HttpException, Logger } from "@n
 import { Response, Request } from "express";
 
 
-@Catch(HttpException)
+@Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
 
   private readonly logger = new Logger(GlobalExceptionFilter.name);
