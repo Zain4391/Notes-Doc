@@ -11,6 +11,7 @@ Controllers are responsible for handling incoming requests and returning respons
 - [Complete CRUD Example](#complete-crud-example)
 - [HTTP Status Codes](#http-status-codes)
 - [Response Headers](#response-headers)
+- [Guards](#guards)
 - [Pipes](#pipes)
 - [Validation with ValidationPipe](#validation-with-validationpipe)
 - [Built-in Pipes](#built-in-pipes)
@@ -360,6 +361,107 @@ create() {
 create() {
   return 'This action adds a new cat';
 }
+```
+
+---
+
+## Guards
+
+Guards are used to protect routes by determining whether a request should be handled or not. They're commonly used for authentication and authorization.
+
+### Method-Level Guard
+
+Apply a guard to a specific route:
+
+```typescript
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { AuthGuard } from './auth.guard';
+
+@Controller('cats')
+export class CatsController {
+  @Get()
+  @UseGuards(AuthGuard)
+  findAll() {
+    return 'This route is protected';
+  }
+}
+```
+
+### Controller-Level Guard
+
+Apply a guard to all routes in a controller:
+
+```typescript
+import { Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { AuthGuard } from './auth.guard';
+
+@Controller('cats')
+@UseGuards(AuthGuard)
+export class CatsController {
+  @Get()
+  findAll() {
+    return 'Protected route';
+  }
+
+  @Post()
+  create() {
+    return 'Also protected';
+  }
+}
+```
+
+### Multiple Guards
+
+Apply multiple guards (they execute in order):
+
+```typescript
+import { Controller, Get, UseGuards } from '@nestjs/common';
+import { AuthGuard } from './auth.guard';
+import { RolesGuard } from './roles.guard';
+
+@Controller('cats')
+export class CatsController {
+  @Get()
+  @UseGuards(AuthGuard, RolesGuard)
+  findAll() {
+    return 'Protected by both guards';
+  }
+}
+```
+
+### Global Guard
+
+Apply a guard to all routes in the application.
+
+In `main.ts`:
+```typescript
+import { NestFactory } from '@nestjs/core';
+import { AppModule } from './app.module';
+import { AuthGuard } from './auth.guard';
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  app.useGlobalGuards(new AuthGuard());
+  await app.listen(3000);
+}
+bootstrap();
+```
+
+Or with dependency injection in `app.module.ts`:
+```typescript
+import { Module } from '@nestjs/core';
+import { APP_GUARD } from '@nestjs/core';
+import { AuthGuard } from './auth.guard';
+
+@Module({
+  providers: [
+    {
+      provide: APP_GUARD,
+      useClass: AuthGuard,
+    },
+  ],
+})
+export class AppModule {}
 ```
 
 ---
