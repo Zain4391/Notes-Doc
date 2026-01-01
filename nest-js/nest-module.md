@@ -234,8 +234,155 @@ providers: [
   },
 ]
 
-// Inject using @Inject()
-constructor(@Inject('CONFIG') private config: any) {}
+// Inject using @Inject() with proper typing
+interface AppConfig {
+  apiKey: string;
+  apiUrl: string;
+}
+
+@Injectable()
+export class SomeService {
+  constructor(@Inject('CONFIG') private config: AppConfig) {
+    // config is now properly typed
+    console.log(this.config.apiKey);
+  }
+}
+```
+
+**More @Inject() Examples with Types:**
+
+```ts
+// 1. String token with interface type
+interface DatabaseConfig {
+  host: string;
+  port: number;
+  database: string;
+}
+
+@Module({
+  providers: [
+    {
+      provide: 'DATABASE_CONFIG',
+      useValue: {
+        host: 'localhost',
+        port: 5432,
+        database: 'mydb',
+      },
+    },
+  ],
+})
+export class ConfigModule {}
+
+@Injectable()
+export class DatabaseService {
+  constructor(
+    @Inject('DATABASE_CONFIG') private dbConfig: DatabaseConfig
+  ) {
+    // dbConfig is typed as DatabaseConfig
+    console.log(`Connecting to ${this.dbConfig.host}:${this.dbConfig.port}`);
+  }
+}
+
+// 2. Factory provider with typed injection
+@Module({
+  providers: [
+    {
+      provide: 'API_CLIENT',
+      useFactory: (config: AppConfig) => {
+        return new ApiClient(config.apiUrl);
+      },
+      inject: ['CONFIG'],
+    },
+  ],
+})
+export class ApiModule {}
+
+@Injectable()
+export class ProductService {
+  constructor(
+    @Inject('API_CLIENT') private apiClient: ApiClient
+  ) {
+    // apiClient is typed as ApiClient class
+  }
+}
+
+// 3. Symbol token (recommended for type safety)
+export const DATABASE_CONNECTION = Symbol('DATABASE_CONNECTION');
+
+interface DatabaseConnection {
+  query: (sql: string) => Promise<any>;
+  close: () => Promise<void>;
+}
+
+@Module({
+  providers: [
+    {
+      provide: DATABASE_CONNECTION,
+      useFactory: async () => {
+        return await createConnection();
+      },
+    },
+  ],
+})
+export class DatabaseModule {}
+
+@Injectable()
+export class UserRepository {
+  constructor(
+    @Inject(DATABASE_CONNECTION) private connection: DatabaseConnection
+  ) {
+    // connection is typed as DatabaseConnection interface
+  }
+
+  async findAll() {
+    return this.connection.query('SELECT * FROM users');
+  }
+}
+
+// 4. Class token with @Inject (explicit injection)
+@Injectable()
+export class LoggerService {
+  log(message: string) {
+    console.log(message);
+  }
+}
+
+@Injectable()
+export class AppService {
+  constructor(
+    @Inject(LoggerService) private logger: LoggerService
+    // Usually you'd just do: private logger: LoggerService
+    // @Inject is optional for class tokens but can be explicit
+  ) {}
+}
+
+// 5. Conditional injection with typing
+type PaymentProvider = StripePayment | PaypalPayment;
+
+@Module({
+  providers: [
+    {
+      provide: 'PAYMENT_PROVIDER',
+      useFactory: (configService: ConfigService): PaymentProvider => {
+        const provider = configService.get('PAYMENT_PROVIDER');
+        return provider === 'stripe' 
+          ? new StripePayment() 
+          : new PaypalPayment();
+      },
+      inject: [ConfigService],
+    },
+  ],
+})
+export class PaymentModule {}
+
+@Injectable()
+export class CheckoutService {
+  constructor(
+    @Inject('PAYMENT_PROVIDER') private paymentProvider: PaymentProvider
+  ) {
+    // paymentProvider is typed as union type
+  }
+}
 ```
 
 **c) Factory Providers (useFactory):**
