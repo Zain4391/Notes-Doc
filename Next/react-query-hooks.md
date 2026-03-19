@@ -7,6 +7,7 @@ Reference from the Food Delivery Frontend project. Covers query hooks, mutation 
 ## Folder Structure
 
 ```
+
 hooks/
 ├── queries/
 │   ├── useOrders.ts
@@ -49,7 +50,7 @@ export function useOrder(id: string) {
   return useQuery({
     queryKey: ["orders", id],
     queryFn: () => orderService.getOrderById(id),
-    enabled: Boolean(id),   // ← don't fire if id is empty
+    enabled: Boolean(id), // ← don't fire if id is empty
   });
 }
 ```
@@ -60,7 +61,10 @@ Any hook that takes an `id` or a condition must have `enabled`:
 
 ```ts
 // ✅ correct — only fires when customerId exists
-export function useCustomerOrders(customerId: string, params?: OrderListParams) {
+export function useCustomerOrders(
+  customerId: string,
+  params?: OrderListParams,
+) {
   return useQuery({
     queryKey: ["orders", "customer", customerId, params],
     queryFn: () => orderService.getOrdersByCustomer(customerId, params),
@@ -99,36 +103,36 @@ This is where mistakes were made. The query key determines caching AND invalidat
 
 ```ts
 // ✅ correct — all start with "orders"
-queryKey: ["orders", params]
-queryKey: ["orders", id]
-queryKey: ["orders", "customer", customerId, params]
-queryKey: ["orders", "driver", driverId, params]
-queryKey: ["orders", "restaurant", restaurantId, params]
+queryKey: ["orders", params];
+queryKey: ["orders", id];
+queryKey: ["orders", "customer", customerId, params];
+queryKey: ["orders", "driver", driverId, params];
+queryKey: ["orders", "restaurant", restaurantId, params];
 
 // ❌ wrong — different roots, invalidating ["orders"] won't catch these
-queryKey: ["customer", { customerId, params }]
-queryKey: ["driver", { driverId, params }]
-queryKey: ["restaurant", { restaurantId, params }]
+queryKey: ["customer", { customerId, params }];
+queryKey: ["driver", { driverId, params }];
+queryKey: ["restaurant", { restaurantId, params }];
 ```
 
 ### Rule 2 — Flatten params into the array, don't group into an object
 
 ```ts
 // ✅ correct
-queryKey: ["orders", "customer", customerId, params]
+queryKey: ["orders", "customer", customerId, params];
 
 // ❌ wrong — grouping hides the id from the key hierarchy
-queryKey: ["orders", "customer", { customerId, params }]
+queryKey: ["orders", "customer", { customerId, params }];
 ```
 
 ### Rule 3 — Don't use generic roots that clash with other resources
 
 ```ts
 // ❌ wrong — "driver" root will clash with useDrivers hook keys
-queryKey: ["driver", { driverId, params }]
+queryKey: ["driver", { driverId, params }];
 
 // ✅ correct — nested under "orders"
-queryKey: ["orders", "driver", driverId, params]
+queryKey: ["orders", "driver", driverId, params];
 ```
 
 ### Why this matters — `invalidateQueries` uses prefix matching
@@ -256,8 +260,8 @@ updateStatus({ id: "some-uuid", status: "confirmed" });
 
 ```ts
 // Made this mistake in useOrders.ts
-queryKey: ["customer", { customerId, params }]  // root is "customer" not "orders"
-queryKey: ["driver", { driverId, params }]       // root is "driver" not "orders"
+queryKey: ["customer", { customerId, params }]; // root is "customer" not "orders"
+queryKey: ["driver", { driverId, params }]; // root is "driver" not "orders"
 ```
 
 **Why it's wrong:** `invalidateQueries({ queryKey: ["orders"] })` in mutations wouldn't catch these. Customer and driver order queries would go stale and never refetch after a mutation.
@@ -279,12 +283,19 @@ import { AssignDriverDTO, UpdateOrderStatusDTO } from "@/types/order.types";
 
 ```ts
 // In useDriverMutations.ts — imported customer DTOs for driver mutations
-import { UpdateProfileImageDTO, UpdateProfilePasswordDTO } from "@/types/customer.types";
+import {
+  UpdateProfileImageDTO,
+  UpdateProfilePasswordDTO,
+} from "@/types/customer.types";
 ```
 
 **Fix:** Driver has its own DTOs in `driver.types.ts`:
+
 ```ts
-import { UpdateDriverProfileImgDTO, UpdateDriverProfilePasswordDTO } from "@/types/driver.types";
+import {
+  UpdateDriverProfileImgDTO,
+  UpdateDriverProfilePasswordDTO,
+} from "@/types/driver.types";
 ```
 
 ---
@@ -318,6 +329,7 @@ export function useUpdatePassword() { ... }
 **Why it's a problem:** When both are imported in the same file, one will shadow the other.
 
 **Fix:** Prefix driver mutations with the resource name:
+
 ```ts
 export function useUpdateDriverProfile() { ... }
 export function useUpdateDriverPassword() { ... }
@@ -365,10 +377,10 @@ queryKey: ["customers", "profile"],
 
 ```ts
 // ❌ used CustomerListParams for order filtering
-export function useCustomerOrders(id: string, params?: CustomerListParams)
+export function useCustomerOrders(id: string, params?: CustomerListParams);
 
 // ✅ correct — orders have their own params type
-export function useCustomerOrders(id: string, params?: OrderListParams)
+export function useCustomerOrders(id: string, params?: OrderListParams);
 ```
 
 `CustomerListParams.sortBy` is constrained to `"name" | "email" | "created_at"` — those are customer fields, not order fields.
@@ -377,10 +389,10 @@ export function useCustomerOrders(id: string, params?: OrderListParams)
 
 ## Zustand + React Query — `getState()` vs hooks
 
-| Context | Use |
-|---|---|
-| React component / hook | `useAuthStore()`, `useIsAdmin()` etc. |
-| Outside React (Axios interceptor, useEffect body) | `useAuthStore.getState()` |
+| Context                                           | Use                                   |
+| ------------------------------------------------- | ------------------------------------- |
+| React component / hook                            | `useAuthStore()`, `useIsAdmin()` etc. |
+| Outside React (Axios interceptor, useEffect body) | `useAuthStore.getState()`             |
 
 ```ts
 // ✅ Axios interceptor — NOT a React component, use getState()
