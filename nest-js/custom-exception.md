@@ -7,16 +7,19 @@ Custom exceptions provide more control over error responses and allow you to cre
 This pattern follows Spring Boot's exception handling approach:
 
 **Spring Boot Pattern:**
+
 - Services throw exceptions
 - Controllers let exceptions bubble up (no try-catch)
 - `@RestControllerAdvice` catches and formats all exceptions globally
 
 **NestJS Equivalent:**
+
 - Services throw custom exceptions
 - Controllers let exceptions bubble up (no try-catch needed)
 - Exception Filters (like `@Catch()`) act as `@RestControllerAdvice` to catch and format exceptions globally
 
 **Flow:**
+
 ```
 Controller → Service → throws CustomException
      ↓
@@ -40,7 +43,7 @@ Formatted JSON response sent to client
 **src/common/exceptions/custom-base.exception.ts**
 
 ```ts
-import { HttpException, HttpStatus } from '@nestjs/common';
+import { HttpException, HttpStatus } from "@nestjs/common";
 
 export class CustomBaseException extends HttpException {
   constructor(message: string, statusCode: HttpStatus) {
@@ -64,12 +67,12 @@ export class CustomBaseException extends HttpException {
 **src/common/exceptions/auth.exceptions.ts**
 
 ```ts
-import { HttpStatus } from '@nestjs/common';
-import { CustomBaseException } from './custom-base.exception';
+import { HttpStatus } from "@nestjs/common";
+import { CustomBaseException } from "./custom-base.exception";
 
 export class InvalidCredentialsException extends CustomBaseException {
   constructor() {
-    super('Invalid email or password', HttpStatus.UNAUTHORIZED);
+    super("Invalid email or password", HttpStatus.UNAUTHORIZED);
   }
 }
 
@@ -81,22 +84,25 @@ export class EmailAlreadyExistsException extends CustomBaseException {
 
 export class TokenExpiredException extends CustomBaseException {
   constructor() {
-    super('Your session has expired. Please login again', HttpStatus.UNAUTHORIZED);
+    super(
+      "Your session has expired. Please login again",
+      HttpStatus.UNAUTHORIZED,
+    );
   }
 }
 
 export class InvalidTokenException extends CustomBaseException {
   constructor() {
-    super('Invalid authentication token', HttpStatus.UNAUTHORIZED);
+    super("Invalid authentication token", HttpStatus.UNAUTHORIZED);
   }
 }
 
 export class UnauthorizedAccessException extends CustomBaseException {
   constructor(resource?: string) {
     super(
-      resource 
-        ? `You are not authorized to access ${resource}` 
-        : 'You are not authorized to perform this action',
+      resource
+        ? `You are not authorized to access ${resource}`
+        : "You are not authorized to perform this action",
       HttpStatus.FORBIDDEN,
     );
   }
@@ -106,8 +112,8 @@ export class UnauthorizedAccessException extends CustomBaseException {
 **src/common/exceptions/customer.exceptions.ts**
 
 ```ts
-import { HttpStatus } from '@nestjs/common';
-import { CustomBaseException } from './custom-base.exception';
+import { HttpStatus } from "@nestjs/common";
+import { CustomBaseException } from "./custom-base.exception";
 
 export class CustomerNotFoundException extends CustomBaseException {
   constructor(id: string) {
@@ -131,8 +137,8 @@ export class CustomerAlreadyExistsException extends CustomBaseException {
 **src/common/exceptions/driver.exceptions.ts**
 
 ```ts
-import { HttpStatus } from '@nestjs/common';
-import { CustomBaseException } from './custom-base.exception';
+import { HttpStatus } from "@nestjs/common";
+import { CustomBaseException } from "./custom-base.exception";
 
 export class DriverNotFoundException extends CustomBaseException {
   constructor(id: string) {
@@ -166,13 +172,17 @@ export class DriverAlreadyExistsException extends CustomBaseException {
 **src/common/filters/http-exception.filter.ts**
 
 ```ts
-import { Catch, ExceptionFilter, ArgumentsHost, HttpException, Logger } from "@nestjs/common";
+import {
+  Catch,
+  ExceptionFilter,
+  ArgumentsHost,
+  HttpException,
+  Logger,
+} from "@nestjs/common";
 import { Response, Request } from "express";
-
 
 @Catch()
 export class GlobalExceptionFilter implements ExceptionFilter {
-
   private readonly logger = new Logger(GlobalExceptionFilter.name);
 
   catch(exception: HttpException, host: ArgumentsHost) {
@@ -187,18 +197,22 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     let errorResponse: Record<string, unknown> | undefined;
 
     // custom exception handling
-    if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+    if (typeof exceptionResponse === "object" && exceptionResponse !== null) {
       errorResponse = exceptionResponse as Record<string, unknown>;
-      const respMessage = (errorResponse as { message?: string | string[] }).message;
+      const respMessage = (errorResponse as { message?: string | string[] })
+        .message;
       message = respMessage || message;
-    } else if (typeof exceptionResponse === 'string') {
+    } else if (typeof exceptionResponse === "string") {
       message = exceptionResponse;
-    } else if(exception instanceof Error) {
-        message = exception.message;
-        this.logger.error(`Unhandled error: ${exception.message}`, exception.stack);
+    } else if (exception instanceof Error) {
+      message = exception.message;
+      this.logger.error(
+        `Unhandled error: ${exception.message}`,
+        exception.stack,
+      );
     }
 
-    const messageStr = Array.isArray(message) ? message.join(', ') : message;
+    const messageStr = Array.isArray(message) ? message.join(", ") : message;
 
     this.logger.error(
       `${request.method} ${request.url} - Status: ${status} - Message: ${messageStr}`,
@@ -211,9 +225,9 @@ export class GlobalExceptionFilter implements ExceptionFilter {
           statusCode: status,
           message,
           timestamp: new Date().toISOString(),
-          path: request.url
-        }
-      }
+          path: request.url,
+        },
+      },
     );
   }
 }
@@ -224,24 +238,26 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 **src/main.ts**
 
 ```ts
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { AppModule } from './app.module';
-import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { NestFactory } from "@nestjs/core";
+import { ValidationPipe } from "@nestjs/common";
+import { AppModule } from "./app.module";
+import { GlobalExceptionFilter } from "./common/filters/http-exception.filter";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
+
   // Register global exception filter (like @RestControllerAdvice)
   app.useGlobalFilters(new GlobalExceptionFilter());
-  
+
   // Optional: Add validation pipe for DTO validation
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-  }));
-  
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+
   await app.listen(3000);
 }
 bootstrap();
@@ -254,21 +270,21 @@ bootstrap();
 **src/auth/auth.service.ts**
 
 ```ts
-import { Injectable } from '@nestjs/common';
-import { JwtService } from '@nestjs/jwt';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import * as bcrypt from 'bcrypt';
-import { Customer } from '../customers/entities/customer.entity';
-import { DeliveryDriver } from '../delivery-drivers/entities/delivery-driver.entity';
-import { LoginDto } from './dto/login.dto';
-import { RegisterCustomerDto, RegisterDriverDto } from './dto/register.dto';
-import { 
+import { Injectable } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import * as bcrypt from "bcrypt";
+import { Customer } from "../customers/entities/customer.entity";
+import { DeliveryDriver } from "../delivery-drivers/entities/delivery-driver.entity";
+import { LoginDto } from "./dto/login.dto";
+import { RegisterCustomerDto, RegisterDriverDto } from "./dto/register.dto";
+import {
   InvalidCredentialsException,
   EmailAlreadyExistsException,
-} from '../common/exceptions/auth.exceptions';
-import { CustomerAlreadyExistsException } from '../common/exceptions/customer.exceptions';
-import { DriverAlreadyExistsException } from '../common/exceptions/driver.exceptions';
+} from "../common/exceptions/auth.exceptions";
+import { CustomerAlreadyExistsException } from "../common/exceptions/customer.exceptions";
+import { DriverAlreadyExistsException } from "../common/exceptions/driver.exceptions";
 
 @Injectable()
 export class AuthService {
@@ -309,7 +325,10 @@ export class AuthService {
       throw new InvalidCredentialsException();
     }
 
-    const isPasswordValid = await bcrypt.compare(loginDto.password, customer.password);
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      customer.password,
+    );
 
     if (!isPasswordValid) {
       throw new InvalidCredentialsException();
@@ -339,7 +358,10 @@ export class AuthService {
       throw new InvalidCredentialsException();
     }
 
-    const isPasswordValid = await bcrypt.compare(loginDto.password, driver.password);
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      driver.password,
+    );
 
     if (!isPasswordValid) {
       throw new InvalidCredentialsException();
@@ -355,18 +377,21 @@ export class AuthService {
 **src/auth/strategies/jwt-customer.strategy.ts**
 
 ```ts
-import { Injectable } from '@nestjs/common';
-import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { jwtConstants } from '../constants';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Customer } from '../../customers/entities/customer.entity';
-import { InvalidTokenException } from '../../common/exceptions/auth.exceptions';
-import { CustomerNotFoundException } from '../../common/exceptions/customer.exceptions';
+import { Injectable } from "@nestjs/common";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+import { jwtConstants } from "../constants";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { Customer } from "../../customers/entities/customer.entity";
+import { InvalidTokenException } from "../../common/exceptions/auth.exceptions";
+import { CustomerNotFoundException } from "../../common/exceptions/customer.exceptions";
 
 @Injectable()
-export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-customer') {
+export class JwtCustomerStrategy extends PassportStrategy(
+  Strategy,
+  "jwt-customer",
+) {
   constructor(
     @InjectRepository(Customer)
     private customerRepository: Repository<Customer>,
@@ -395,7 +420,7 @@ export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-custome
       id: customer.id,
       email: customer.email,
       name: customer.name,
-      userType: 'customer',
+      userType: "customer",
     };
   }
 }
@@ -404,18 +429,21 @@ export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-custome
 **src/auth/strategies/jwt-driver.strategy.ts**
 
 ```ts
-import { Injectable } from '@nestjs/common';
-import { PassportStrategy } from '@nestjs/passport';
-import { ExtractJwt, Strategy } from 'passport-jwt';
-import { jwtConstants } from '../constants';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { DeliveryDriver } from '../../delivery-drivers/entities/delivery-driver.entity';
-import { InvalidTokenException } from '../../common/exceptions/auth.exceptions';
-import { DriverNotFoundException } from '../../common/exceptions/driver.exceptions';
+import { Injectable } from "@nestjs/common";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+import { jwtConstants } from "../constants";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { DeliveryDriver } from "../../delivery-drivers/entities/delivery-driver.entity";
+import { InvalidTokenException } from "../../common/exceptions/auth.exceptions";
+import { DriverNotFoundException } from "../../common/exceptions/driver.exceptions";
 
 @Injectable()
-export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') {
+export class JwtDriverStrategy extends PassportStrategy(
+  Strategy,
+  "jwt-driver",
+) {
   constructor(
     @InjectRepository(DeliveryDriver)
     private driverRepository: Repository<DeliveryDriver>,
@@ -444,7 +472,7 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
       id: driver.id,
       email: driver.email,
       name: driver.name,
-      userType: 'driver',
+      userType: "driver",
     };
   }
 }
@@ -455,14 +483,14 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
 **src/customers/customers.service.ts**
 
 ```ts
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Customer } from './entities/customer.entity';
-import { 
+import { Injectable } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { Customer } from "./entities/customer.entity";
+import {
   CustomerNotFoundException,
   InvalidCustomerDataException,
-} from '../common/exceptions/customer.exceptions';
+} from "../common/exceptions/customer.exceptions";
 
 @Injectable()
 export class CustomersService {
@@ -490,7 +518,7 @@ export class CustomersService {
       });
 
       if (emailExists) {
-        throw new InvalidCustomerDataException('Email already in use');
+        throw new InvalidCustomerDataException("Email already in use");
       }
     }
 
@@ -510,15 +538,15 @@ export class CustomersService {
 **src/delivery-drivers/delivery-drivers.service.ts**
 
 ```ts
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { DeliveryDriver } from './entities/delivery-driver.entity';
-import { 
+import { Injectable } from "@nestjs/common";
+import { InjectRepository } from "@nestjs/typeorm";
+import { Repository } from "typeorm";
+import { DeliveryDriver } from "./entities/delivery-driver.entity";
+import {
   DriverNotFoundException,
   DriverNotAvailableException,
   InvalidVehicleTypeException,
-} from '../common/exceptions/driver.exceptions';
+} from "../common/exceptions/driver.exceptions";
 
 @Injectable()
 export class DeliveryDriversService {
@@ -538,21 +566,22 @@ export class DeliveryDriversService {
   }
 
   async findAvailableDriver(vehicleType?: string) {
-    const query = this.driverRepository.createQueryBuilder('driver')
-      .where('driver.is_available = :isAvailable', { isAvailable: true });
+    const query = this.driverRepository
+      .createQueryBuilder("driver")
+      .where("driver.is_available = :isAvailable", { isAvailable: true });
 
     if (vehicleType) {
-      const validVehicleTypes = ['bike', 'car', 'van', 'truck'];
+      const validVehicleTypes = ["bike", "car", "van", "truck"];
       if (!validVehicleTypes.includes(vehicleType.toLowerCase())) {
         throw new InvalidVehicleTypeException(vehicleType);
       }
-      query.andWhere('driver.vehicle_type = :vehicleType', { vehicleType });
+      query.andWhere("driver.vehicle_type = :vehicleType", { vehicleType });
     }
 
     const driver = await query.getOne();
 
     if (!driver) {
-      throw new DriverNotAvailableException('any');
+      throw new DriverNotAvailableException("any");
     }
 
     return driver;
@@ -585,26 +614,26 @@ Controllers simply call service methods. Exceptions bubble up to the global exce
 **src/auth/auth.controller.ts**
 
 ```ts
-import { 
-  Controller, 
-  Post, 
-  Body, 
-  HttpCode, 
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
   HttpStatus,
   UseInterceptors,
   ClassSerializerInterceptor,
-} from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { LoginDto } from './dto/login.dto';
-import { RegisterCustomerDto, RegisterDriverDto } from './dto/register.dto';
+} from "@nestjs/common";
+import { AuthService } from "./auth.service";
+import { LoginDto } from "./dto/login.dto";
+import { RegisterCustomerDto, RegisterDriverDto } from "./dto/register.dto";
 
-@Controller('auth')
+@Controller("auth")
 @UseInterceptors(ClassSerializerInterceptor)
 export class AuthController {
   constructor(private authService: AuthService) {}
 
   // No try-catch needed! Exceptions automatically caught by GlobalExceptionFilter
-  @Post('customer/register')
+  @Post("customer/register")
   async registerCustomer(@Body() registerDto: RegisterCustomerDto) {
     return this.authService.registerCustomer(registerDto);
     // If service throws CustomerAlreadyExistsException,
@@ -612,20 +641,20 @@ export class AuthController {
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('customer/login')
+  @Post("customer/login")
   async loginCustomer(@Body() loginDto: LoginDto) {
     return this.authService.loginCustomer(loginDto);
     // If service throws InvalidCredentialsException,
     // GlobalExceptionFilter catches and formats it
   }
 
-  @Post('driver/register')
+  @Post("driver/register")
   async registerDriver(@Body() registerDto: RegisterDriverDto) {
     return this.authService.registerDriver(registerDto);
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('driver/login')
+  @Post("driver/login")
   async loginDriver(@Body() loginDto: LoginDto) {
     return this.authService.loginDriver(loginDto);
   }
@@ -635,41 +664,41 @@ export class AuthController {
 **src/customers/customers.controller.ts**
 
 ```ts
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  Patch, 
-  Param, 
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
   Delete,
   UseGuards,
-} from '@nestjs/common';
-import { CustomersService } from './customers.service';
-import { JwtCustomerGuard } from '../auth/guards/jwt-customer.guard';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
+} from "@nestjs/common";
+import { CustomersService } from "./customers.service";
+import { JwtCustomerGuard } from "../auth/guards/jwt-customer.guard";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
-@Controller('customers')
+@Controller("customers")
 @UseGuards(JwtCustomerGuard)
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
+  @Get(":id")
+  async findOne(@Param("id") id: string) {
     return this.customersService.findOne(id);
     // If customer not found, service throws CustomerNotFoundException
     // GlobalExceptionFilter catches it and returns 404 with proper format
   }
 
-  @Patch(':id')
-  async update(@Param('id') id: string, @Body() updateData: any) {
+  @Patch(":id")
+  async update(@Param("id") id: string, @Body() updateData: any) {
     return this.customersService.update(id, updateData);
     // Service may throw CustomerNotFoundException or InvalidCustomerDataException
     // No try-catch needed - GlobalExceptionFilter handles it
   }
 
-  @Delete(':id')
-  async remove(@Param('id') id: string) {
+  @Delete(":id")
+  async remove(@Param("id") id: string) {
     return this.customersService.remove(id);
   }
 }
@@ -678,44 +707,44 @@ export class CustomersController {
 **src/delivery-drivers/delivery-drivers.controller.ts**
 
 ```ts
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  Patch, 
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
   Param,
   UseGuards,
-} from '@nestjs/common';
-import { DeliveryDriversService } from './delivery-drivers.service';
-import { JwtDriverGuard } from '../auth/guards/jwt-driver.guard';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
+} from "@nestjs/common";
+import { DeliveryDriversService } from "./delivery-drivers.service";
+import { JwtDriverGuard } from "../auth/guards/jwt-driver.guard";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
-@Controller('drivers')
+@Controller("drivers")
 export class DeliveryDriversController {
   constructor(private readonly driversService: DeliveryDriversService) {}
 
-  @Get('available')
-  async findAvailable(@Query('vehicleType') vehicleType?: string) {
+  @Get("available")
+  async findAvailable(@Query("vehicleType") vehicleType?: string) {
     return this.driversService.findAvailableDriver(vehicleType);
     // May throw InvalidVehicleTypeException or DriverNotAvailableException
     // GlobalExceptionFilter handles formatting
   }
 
   @UseGuards(JwtDriverGuard)
-  @Patch(':id/availability')
+  @Patch(":id/availability")
   async updateAvailability(
-    @Param('id') id: string,
-    @Body('isAvailable') isAvailable: boolean,
+    @Param("id") id: string,
+    @Body("isAvailable") isAvailable: boolean,
   ) {
     return this.driversService.updateAvailability(id, isAvailable);
     // May throw DriverNotFoundException
   }
 
-  @Post(':id/assign-order')
+  @Post(":id/assign-order")
   async assignOrder(
-    @Param('id') driverId: string,
-    @Body('orderId') orderId: string,
+    @Param("id") driverId: string,
+    @Body("orderId") orderId: string,
   ) {
     return this.driversService.assignOrder(driverId, orderId);
     // May throw DriverNotFoundException or DriverNotAvailableException
@@ -728,19 +757,19 @@ export class DeliveryDriversController {
 **src/auth/guards/jwt-customer.guard.ts**
 
 ```ts
-import { Injectable, ExecutionContext } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-import { UnauthorizedAccessException } from '../../common/exceptions/auth.exceptions';
+import { Injectable, ExecutionContext } from "@nestjs/common";
+import { AuthGuard } from "@nestjs/passport";
+import { UnauthorizedAccessException } from "../../common/exceptions/auth.exceptions";
 
 @Injectable()
-export class JwtCustomerGuard extends AuthGuard('jwt-customer') {
+export class JwtCustomerGuard extends AuthGuard("jwt-customer") {
   canActivate(context: ExecutionContext) {
     return super.canActivate(context);
   }
 
   handleRequest(err, user, info) {
     if (err || !user) {
-      throw new UnauthorizedAccessException('customer resources');
+      throw new UnauthorizedAccessException("customer resources");
     }
     return user;
   }
@@ -750,19 +779,19 @@ export class JwtCustomerGuard extends AuthGuard('jwt-customer') {
 **src/auth/guards/jwt-driver.guard.ts**
 
 ```ts
-import { Injectable, ExecutionContext } from '@nestjs/common';
-import { AuthGuard } from '@nestjs/passport';
-import { UnauthorizedAccessException } from '../../common/exceptions/auth.exceptions';
+import { Injectable, ExecutionContext } from "@nestjs/common";
+import { AuthGuard } from "@nestjs/passport";
+import { UnauthorizedAccessException } from "../../common/exceptions/auth.exceptions";
 
 @Injectable()
-export class JwtDriverGuard extends AuthGuard('jwt-driver') {
+export class JwtDriverGuard extends AuthGuard("jwt-driver") {
   canActivate(context: ExecutionContext) {
     return super.canActivate(context);
   }
 
   handleRequest(err, user, info) {
     if (err || !user) {
-      throw new UnauthorizedAccessException('driver resources');
+      throw new UnauthorizedAccessException("driver resources");
     }
     return user;
   }
@@ -785,8 +814,8 @@ import {
   HttpException,
   HttpStatus,
   Logger,
-} from '@nestjs/common';
-import { Request, Response } from 'express';
+} from "@nestjs/common";
+import { Request, Response } from "express";
 
 @Catch() // Catches all exceptions (like @RestControllerAdvice)
 export class GlobalExceptionFilter implements ExceptionFilter {
@@ -798,25 +827,29 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     const request = ctx.getRequest<Request>();
 
     let status = HttpStatus.INTERNAL_SERVER_ERROR;
-    let message: string | string[] = 'Internal server error';
+    let message: string | string[] = "Internal server error";
     let errorResponse: any;
 
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       const exceptionResponse = exception.getResponse();
-      
+
       // Handle custom exception format
-      if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+      if (typeof exceptionResponse === "object" && exceptionResponse !== null) {
         errorResponse = exceptionResponse;
-        message = (exceptionResponse as any).error?.message || 
-                  (exceptionResponse as any).message || 
-                  message;
+        message =
+          (exceptionResponse as any).error?.message ||
+          (exceptionResponse as any).message ||
+          message;
       } else {
         message = exceptionResponse as string;
       }
     } else if (exception instanceof Error) {
       message = exception.message;
-      this.logger.error(`Unhandled error: ${exception.message}`, exception.stack);
+      this.logger.error(
+        `Unhandled error: ${exception.message}`,
+        exception.stack,
+      );
     }
 
     // Log the error
@@ -845,24 +878,26 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 **src/main.ts**
 
 ```ts
-import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
-import { AppModule } from './app.module';
-import { GlobalExceptionFilter } from './common/filters/http-exception.filter';
+import { NestFactory } from "@nestjs/core";
+import { ValidationPipe } from "@nestjs/common";
+import { AppModule } from "./app.module";
+import { GlobalExceptionFilter } from "./common/filters/http-exception.filter";
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
+
   // Register global exception filter (like @RestControllerAdvice)
   app.useGlobalFilters(new GlobalExceptionFilter());
-  
+
   // Optional: Add validation pipe for DTO validation
-  app.useGlobalPipes(new ValidationPipe({
-    whitelist: true,
-    forbidNonWhitelisted: true,
-    transform: true,
-  }));
-  
+  app.useGlobalPipes(
+    new ValidationPipe({
+      whitelist: true,
+      forbidNonWhitelisted: true,
+      transform: true,
+    }),
+  );
+
   await app.listen(3000);
 }
 bootstrap();
@@ -877,26 +912,26 @@ Controllers simply call service methods. Exceptions bubble up to the global exce
 **src/auth/auth.controller.ts**
 
 ```ts
-import { 
-  Controller, 
-  Post, 
-  Body, 
-  HttpCode, 
+import {
+  Controller,
+  Post,
+  Body,
+  HttpCode,
   HttpStatus,
   UseInterceptors,
   ClassSerializerInterceptor,
-} from '@nestjs/common';
-import { AuthService } from './auth.service';
-import { LoginDto } from './dto/login.dto';
-import { RegisterCustomerDto, RegisterDriverDto } from './dto/register.dto';
+} from "@nestjs/common";
+import { AuthService } from "./auth.service";
+import { LoginDto } from "./dto/login.dto";
+import { RegisterCustomerDto, RegisterDriverDto } from "./dto/register.dto";
 
-@Controller('auth')
+@Controller("auth")
 @UseInterceptors(ClassSerializerInterceptor)
 export class AuthController {
   constructor(private authService: AuthService) {}
 
   // No try-catch needed! Exceptions automatically caught by GlobalExceptionFilter
-  @Post('customer/register')
+  @Post("customer/register")
   async registerCustomer(@Body() registerDto: RegisterCustomerDto) {
     return this.authService.registerCustomer(registerDto);
     // If service throws CustomerAlreadyExistsException,
@@ -904,20 +939,20 @@ export class AuthController {
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('customer/login')
+  @Post("customer/login")
   async loginCustomer(@Body() loginDto: LoginDto) {
     return this.authService.loginCustomer(loginDto);
     // If service throws InvalidCredentialsException,
     // GlobalExceptionFilter catches and formats it
   }
 
-  @Post('driver/register')
+  @Post("driver/register")
   async registerDriver(@Body() registerDto: RegisterDriverDto) {
     return this.authService.registerDriver(registerDto);
   }
 
   @HttpCode(HttpStatus.OK)
-  @Post('driver/login')
+  @Post("driver/login")
   async loginDriver(@Body() loginDto: LoginDto) {
     return this.authService.loginDriver(loginDto);
   }
@@ -927,41 +962,41 @@ export class AuthController {
 **src/customers/customers.controller.ts**
 
 ```ts
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  Patch, 
-  Param, 
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
   Delete,
   UseGuards,
-} from '@nestjs/common';
-import { CustomersService } from './customers.service';
-import { JwtCustomerGuard } from '../auth/guards/jwt-customer.guard';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
+} from "@nestjs/common";
+import { CustomersService } from "./customers.service";
+import { JwtCustomerGuard } from "../auth/guards/jwt-customer.guard";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
-@Controller('customers')
+@Controller("customers")
 @UseGuards(JwtCustomerGuard)
 export class CustomersController {
   constructor(private readonly customersService: CustomersService) {}
 
-  @Get(':id')
-  async findOne(@Param('id') id: string) {
+  @Get(":id")
+  async findOne(@Param("id") id: string) {
     return this.customersService.findOne(id);
     // If customer not found, service throws CustomerNotFoundException
     // GlobalExceptionFilter catches it and returns 404 with proper format
   }
 
-  @Patch(':id')
-  async update(@Param('id') id: string, @Body() updateData: any) {
+  @Patch(":id")
+  async update(@Param("id") id: string, @Body() updateData: any) {
     return this.customersService.update(id, updateData);
     // Service may throw CustomerNotFoundException or InvalidCustomerDataException
     // No try-catch needed - GlobalExceptionFilter handles it
   }
 
-  @Delete(':id')
-  async remove(@Param('id') id: string) {
+  @Delete(":id")
+  async remove(@Param("id") id: string) {
     return this.customersService.remove(id);
   }
 }
@@ -970,45 +1005,45 @@ export class CustomersController {
 **src/delivery-drivers/delivery-drivers.controller.ts**
 
 ```ts
-import { 
-  Controller, 
-  Get, 
-  Post, 
-  Body, 
-  Patch, 
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
   Param,
   Query,
   UseGuards,
-} from '@nestjs/common';
-import { DeliveryDriversService } from './delivery-drivers.service';
-import { JwtDriverGuard } from '../auth/guards/jwt-driver.guard';
-import { CurrentUser } from '../auth/decorators/current-user.decorator';
+} from "@nestjs/common";
+import { DeliveryDriversService } from "./delivery-drivers.service";
+import { JwtDriverGuard } from "../auth/guards/jwt-driver.guard";
+import { CurrentUser } from "../auth/decorators/current-user.decorator";
 
-@Controller('drivers')
+@Controller("drivers")
 export class DeliveryDriversController {
   constructor(private readonly driversService: DeliveryDriversService) {}
 
-  @Get('available')
-  async findAvailable(@Query('vehicleType') vehicleType?: string) {
+  @Get("available")
+  async findAvailable(@Query("vehicleType") vehicleType?: string) {
     return this.driversService.findAvailableDriver(vehicleType);
     // May throw InvalidVehicleTypeException or DriverNotAvailableException
     // GlobalExceptionFilter handles formatting
   }
 
   @UseGuards(JwtDriverGuard)
-  @Patch(':id/availability')
+  @Patch(":id/availability")
   async updateAvailability(
-    @Param('id') id: string,
-    @Body('isAvailable') isAvailable: boolean,
+    @Param("id") id: string,
+    @Body("isAvailable") isAvailable: boolean,
   ) {
     return this.driversService.updateAvailability(id, isAvailable);
     // May throw DriverNotFoundException
   }
 
-  @Post(':id/assign-order')
+  @Post(":id/assign-order")
   async assignOrder(
-    @Param('id') driverId: string,
-    @Body('orderId') orderId: string,
+    @Param("id") driverId: string,
+    @Body("orderId") orderId: string,
   ) {
     return this.driversService.assignOrder(driverId, orderId);
     // May throw DriverNotFoundException or DriverNotAvailableException
@@ -1029,6 +1064,7 @@ Services focus on business logic and throw domain-specific exceptions when thing
 When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
 
 ### Customer Not Found (404)
+
 ```json
 {
   "success": false,
@@ -1042,6 +1078,7 @@ When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
 ```
 
 ### Invalid Credentials (401)
+
 ```json
 {
   "success": false,
@@ -1055,6 +1092,7 @@ When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
 ```
 
 ### Email Already Exists (409)
+
 ```json
 {
   "success": false,
@@ -1068,6 +1106,7 @@ When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
 ```
 
 ### Driver Not Available (409)
+
 ```json
 {
   "success": false,
@@ -1081,6 +1120,7 @@ When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
 ```
 
 ### Unauthorized Access (403)
+
 ```json
 {
   "success": false,
@@ -1091,6 +1131,31 @@ When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
     "path": "/drivers/profile"
   }
 }
+```
+
+## `GlobalExceptionFilter` — Catch All Errors Safely
+
+NestJS `@Catch()` (no argument) catches everything — including plain `Error` and `TypeError`, not just `HttpException`. Always check `instanceof` before calling `HttpException` methods:
+
+```ts
+// ❌ crashes when a plain TypeError is thrown
+catch(exception: HttpException, host: ArgumentsHost) {
+  const status = exception.getStatus(); // TypeError: getStatus is not a function
+```
+
+```ts
+// ✅ correct
+catch(exception: unknown, host: ArgumentsHost) {
+  let status = HttpStatus.INTERNAL_SERVER_ERROR;
+  let message = "Internal Server Error";
+
+  if (exception instanceof HttpException) {
+    status = exception.getStatus();
+    // ...
+  } else if (exception instanceof Error) {
+    message = exception.message;
+    this.logger.error(exception.message, exception.stack);
+  }
 ```
 
 ## Benefits of This Approach (@RestControllerAdvice Pattern)
@@ -1107,14 +1172,14 @@ When exceptions are thrown, the GlobalExceptionFilter formats them consistently:
 
 ## Comparison with Spring Boot
 
-| Spring Boot | NestJS Equivalent |
-|-------------|-------------------|
-| `@RestControllerAdvice` | `@Catch()` Exception Filter |
-| Service throws exceptions | Service throws custom exceptions |
-| `@ExceptionHandler` methods | `catch()` method in filter |
-| Controller has no try-catch | Controller has no try-catch |
-| Global exception handling | Global exception filter |
-| Custom exception classes | Custom exception classes extending HttpException |
+| Spring Boot                 | NestJS Equivalent                                |
+| --------------------------- | ------------------------------------------------ |
+| `@RestControllerAdvice`     | `@Catch()` Exception Filter                      |
+| Service throws exceptions   | Service throws custom exceptions                 |
+| `@ExceptionHandler` methods | `catch()` method in filter                       |
+| Controller has no try-catch | Controller has no try-catch                      |
+| Global exception handling   | Global exception filter                          |
+| Custom exception classes    | Custom exception classes extending HttpException |
 
 ## Key Takeaways
 

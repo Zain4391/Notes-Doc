@@ -85,13 +85,13 @@ export function useOrders(params?: OrderListParams) {
 
 ```ts
 // Block until hydrated AND id exists
-enabled: isHydrated && Boolean(id)
+enabled: isHydrated && Boolean(id);
 
 // Block until hydrated AND user is the right role
-enabled: isHydrated && userType === "admin"
+enabled: isHydrated && userType === "admin";
 
 // Block until hydrated AND external flag
-enabled: isHydrated && (options?.enabled ?? true)
+enabled: isHydrated && (options?.enabled ?? true);
 ```
 
 **Important:** `isHydrated` is NOT persisted to localStorage. It must be set fresh on every page load by `AsyncBridge`. If you persist it, the flag stays `true` across sessions and the gap problem returns.
@@ -258,8 +258,8 @@ interface PaginatedResponse<T> {
 ### Usage in pages
 
 ```ts
-const customers = data?.items ?? [];           // ✅ not data?.data
-const total = data?.meta.totalItems ?? 0;      // ✅ not data?.total
+const customers = data?.items ?? []; // ✅ not data?.data
+const total = data?.meta.totalItems ?? 0; // ✅ not data?.total
 const totalPages = Math.ceil(total / PAGE_SIZE);
 ```
 
@@ -310,11 +310,11 @@ mutationFn: ({ id, status }: { id: string; status: OrderStatus }) => ...
 
 ```ts
 useMutation({
-  onSuccess: (data, variables, context) => { },   // mutation succeeded
-  onError:   (error, variables, context) => { },  // mutation failed
-  onSettled: (data, error, variables) => { },     // always — like finally
-  onMutate:  async (variables) => { },            // before — optimistic updates
-})
+  onSuccess: (data, variables, context) => {}, // mutation succeeded
+  onError: (error, variables, context) => {}, // mutation failed
+  onSettled: (data, error, variables) => {}, // always — like finally
+  onMutate: async (variables) => {}, // before — optimistic updates
+});
 ```
 
 `onSettled` is the right place to invalidate when you want to refetch regardless of success/failure.
@@ -339,7 +339,7 @@ Without this, uploads complete on the server but the frontend throws `timeout of
 ```tsx
 // Query
 const { data, isLoading, isError } = useOrders({ page: 1, limit: 10 });
-const orders = data?.items ?? [];             // always use ?. and ?? []
+const orders = data?.items ?? []; // always use ?. and ?? []
 const total = data?.meta.totalItems ?? 0;
 
 // Mutation — single arg
@@ -355,10 +355,10 @@ updateStatus({ id: "some-uuid", status: "confirmed" });
 
 ## Zustand + React Query — `getState()` vs hooks
 
-| Context | Use |
-|---------|-----|
-| React component / hook | `useAuthStore()`, `useIsAdmin()` etc. |
-| Outside React (Axios interceptor, plain function) | `useAuthStore.getState()` |
+| Context                                           | Use                                   |
+| ------------------------------------------------- | ------------------------------------- |
+| React component / hook                            | `useAuthStore()`, `useIsAdmin()` etc. |
+| Outside React (Axios interceptor, plain function) | `useAuthStore.getState()`             |
 
 ```ts
 // ✅ Axios interceptor — NOT a React component
@@ -411,7 +411,7 @@ import { UpdateDriverProfileImgDTO } from "@/types/driver.types";
 ### ❌ Mistake 4 — Inconsistent invalidation keys
 
 ```ts
-queryClient.invalidateQueries({ queryKey: ["order"] });        // singular — matches nothing
+queryClient.invalidateQueries({ queryKey: ["order"] }); // singular — matches nothing
 queryClient.invalidateQueries({ queryKey: ["order", "driver"] }); // made up
 // ✅ always use the root: ["orders"], ["customers"], ["drivers"]
 ```
@@ -434,7 +434,7 @@ export function useUpdatePassword() { ... }
 
 ```ts
 // ❌ fires with empty string id
-enabled: Boolean(id) // missing entirely
+enabled: Boolean(id); // missing entirely
 // ✅ always add for any hook that takes an id
 ```
 
@@ -520,7 +520,7 @@ return {
   email: customer.email,
   name: customer.name,
   role: customer.role,
-  userType: 'customer',
+  userType: "customer",
   profile_img_url: customer.profile_image_url ?? undefined, // ← added
 };
 ```
@@ -572,10 +572,14 @@ export function useProfileImage(): string {
   if (!isHydrated) return "";
 
   switch (userType) {
-    case "admin":    return adminProfile?.profile_img_url ?? "";
-    case "customer": return customerProfile?.profile_img_url ?? "";
-    case "driver":   return driverProfile?.profile_img_url ?? "";
-    default:         return "";
+    case "admin":
+      return adminProfile?.profile_img_url ?? "";
+    case "customer":
+      return customerProfile?.profile_img_url ?? "";
+    case "driver":
+      return driverProfile?.profile_img_url ?? "";
+    default:
+      return "";
   }
 }
 ```
@@ -583,28 +587,3 @@ export function useProfileImage(): string {
 Because each profile hook is already called on the settings page, the image is cached and the Header gets it for free with no extra network request. When the settings page upload mutation invalidates the query, the Header re-renders with the new image automatically.
 
 ---
-
-## `GlobalExceptionFilter` — Catch All Errors Safely
-
-NestJS `@Catch()` (no argument) catches everything — including plain `Error` and `TypeError`, not just `HttpException`. Always check `instanceof` before calling `HttpException` methods:
-
-```ts
-// ❌ crashes when a plain TypeError is thrown
-catch(exception: HttpException, host: ArgumentsHost) {
-  const status = exception.getStatus(); // TypeError: getStatus is not a function
-```
-
-```ts
-// ✅ correct
-catch(exception: unknown, host: ArgumentsHost) {
-  let status = HttpStatus.INTERNAL_SERVER_ERROR;
-  let message = "Internal Server Error";
-
-  if (exception instanceof HttpException) {
-    status = exception.getStatus();
-    // ...
-  } else if (exception instanceof Error) {
-    message = exception.message;
-    this.logger.error(exception.message, exception.stack);
-  }
-```
