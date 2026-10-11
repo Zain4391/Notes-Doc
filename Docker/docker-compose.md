@@ -1,19 +1,28 @@
 # Docker Compose
 
-**Status: Covered — Phase 4**
+Describing a multi-container application in one YAML file and running it with a single command.
+
+Related: [Networking](docker-networking.md) · [Volumes](docker-volumes.md) · [Security](docker-security.md) · [Containers](docker-containers.md)
+
+**Contents**
+
+1. [Overview](#overview)
+2. [Example: Postgres and a client](#example-postgres-and-a-client)
+3. [Key concepts](#key-concepts)
+4. [Commands](#commands)
+5. [Pitfalls](#pitfalls)
 
 ---
 
 ## Overview
 
-Compose takes what you'd otherwise run as several manual `docker network create` / `docker volume create` / `docker run` commands and describes the same end state declaratively in one YAML file. Nothing new under the hood — same primitives, one command (`docker compose up`) to reconcile reality against the spec.
+Compose takes what you would otherwise run as several manual `docker network create`, `docker volume create` and `docker run` commands and describes the same end state declaratively in one file. It adds nothing new under the hood: the same primitives, with one command (`docker compose up`) to bring reality in line with the spec.
 
-- A `service:` block is a **spec** for how to run a container, not the container itself.
-- The moment you run `docker compose up`, Compose auto-creates an implicit bridge network (`<folder>_default`) and attaches every service to it — same embedded-DNS name resolution as a manual user-defined network, zero explicit `networks:` block required for the simple case.
+- A `services:` entry is a **spec** for how to run a container, not the container itself.
+- On `docker compose up`, Compose automatically creates a bridge network named `<folder>_default` and attaches every service to it. Services reach each other **by service name** through Docker's embedded DNS, so the simple case needs no `networks:` block (see [Networking](docker-networking.md)).
+- The file is conventionally `compose.yaml` or `docker-compose.yml`; both are supported.
 
----
-
-## Example — Postgres + client, hardened
+## Example: Postgres and a client
 
 ```yaml
 services:
@@ -34,41 +43,65 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["tail", "-f", "/dev/null"]   # idle container, exec in on demand
+    command: ["tail", "-f", "/dev/null"]   # idle container; exec in on demand
 
 volumes:
   pgvol:
 ```
 
-`.env` (gitignored):
+`.env` (add to `.gitignore`):
+
 ```
 POSTGRES_PASSWORD=postgres
 ```
 
----
+What each part does:
+
+| Part | Purpose |
+|---|---|
+| `volumes: pgvol` | Named volume so the database survives container removal ([Volumes](docker-volumes.md)) |
+| `healthcheck` | Defines how Compose decides `db` is *ready*, not just started |
+| `depends_on ... service_healthy` | `client` starts only after `db` reports healthy |
+| `command: tail -f /dev/null` | Keeps `client` running idle so you can `exec` into it. This is the "toolbox container" pattern used in production for on-demand tooling |
+
+## Key concepts
+
+### `depends_on` conditions
+
+| Condition | Waits until |
+|---|---|
+| *(none)* / `service_started` | The container has **started**. It says nothing about whether the app inside is ready |
+| `service_healthy` | The dependency's `healthcheck` reports healthy |
+| `service_completed_successfully` | The dependency has exited with code 0 (for one-shot jobs such as migrations) |
+
+### `.env` and variable substitution
+
+Compose automatically loads `.env` from the same folder as the Compose file (no flag needed) and substitutes `${VAR}` references before validating the YAML. Use `docker compose config` to see the final rendered result.
+
+> `.env` is **not** secrets management (see [Security](docker-security.md)). It only stops you hardcoding a password in a file you would commit to git.
 
 ## Commands
 
 ```bash
 docker compose up -d              # start all services, detached
-docker compose ps                 # list this project's services + health status
+docker compose ps                 # list this project's services and health status
 docker compose logs -f            # follow logs, all services
-docker compose down               # stop + remove containers/network
-docker compose down -v            # also remove volumes — true clean reset
-docker compose exec client sh     # jump into an already-running service
+docker compose down               # stop and remove containers and network
+docker compose down -v            # also remove volumes: a true clean reset
+docker compose exec client sh     # shell into an already-running service
 docker compose run --rm client psql -h db -U postgres   # fresh one-off interactive container
 docker compose config             # render final YAML with .env substitution resolved
 ```
 
+`exec` joins a running service; `run --rm` starts a new one-off container. For how these differ from `attach`, see [Containers](docker-containers.md#attach-vs-run-vs-exec).
+
+## Pitfalls
+
+| Problem | What happens | Fix |
+|---|---|---|
+| **`depends_on` without a condition** | `client` starts as soon as `db`'s container starts, races its startup, gets *connection refused* and exits (`docker compose ps` shows `Exited (2)`). Compose does not restart one-shot commands that fail | Add a `healthcheck` (`pg_isready`) and `depends_on: db: condition: service_healthy` |
+| **Stale volume / baked-in password** | `initdb` runs **only once, on a fresh volume**. Changing `POSTGRES_PASSWORD` in the YAML, or moving it into `.env`, has **no effect** on an already-initialized volume; the old password is what is on disk | `docker compose down -v`, then `up` again so `initdb` runs with the new value (this deletes the data) |
+
 ---
 
-## Notes — real bugs hit and fixed
-
-- **`depends_on` without a condition only waits for "container started," not "app ready."** Hit this for real: `client` raced `db`'s startup and got connection-refused, exiting immediately (`docker compose ps` showed `Exited (2)`, not "Up," since Compose doesn't restart one-shot commands that fail). Fixed with `healthcheck` (`pg_isready`) + `depends_on: db: condition: service_healthy` — Compose now polls until `db` reports healthy before starting `client`.
-- **Stale-volume/baked-in-password gotcha** — hit twice. `initdb` only runs once, on a fresh volume. Changing `POSTGRES_PASSWORD` in YAML (or migrating it into `.env`) has **zero effect** on an already-initialized volume — the old password is what's on disk. Only `docker compose down -v` + fresh `up` re-triggers `initdb` with the new value.
-- **`attach` vs `run --rm` vs `exec`** have genuinely different failure modes, not just definitions — `attach` fails for startup-time prompts (missed window), `run --rm` gives a fresh interactive container with stdin wired from the start, `exec` jumps into a container already running (paired with a `tail -f /dev/null` idle-service pattern for on-demand tool access — the real pattern used for "toolbox" containers in production).
-- `.env` is **not** real secrets management (see docker-security.md) — it's just "stop hardcoding a password in a file you'd commit to git." Compose auto-loads `.env` from the same folder as `docker-compose.yml`, no flag needed, and substitutes `${VAR}` references before validating the YAML.
-
----
-
-[[README|← Back to Docker index]]
+[← Back to Docker index](README.md)

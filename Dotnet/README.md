@@ -14,6 +14,7 @@ Examples target **.NET 10**. The database examples use **PostgreSQL** (Npgsql) i
 | [Options Pattern](options-pattern.md) | Strongly-typed configuration, binding a class to a section, fail-fast validation with `ValidateOnStart`, `IOptions` vs `IOptionsSnapshot` vs `IOptionsMonitor`, connection strings |
 | [Database Setup & AppDbContext](database-setup-efcore.md) | EF Core packages, folder layout, `AppDbContext`, registration, DI lifetimes (captive dependency), migrations, repository pattern, `IQueryable` pitfall |
 | [EF Core and Fluent API Cheat Sheet](EF%20Core%20and%20Fluent%20API%20Cheat%20Sheet.md) | CRUD, queries, loading related data, tracking, Fluent API model configuration, transactions, concurrency, raw SQL, diagnostics, gotchas |
+| [Dockerizing an ASP.NET Core App](dotnet-docker.md) | Multi-stage Dockerfile walkthrough, build and run, container differences (environment, HTTPS, ports), improvements, Compose with a database, running EF migrations |
 
 ## Suggested reading order
 
@@ -23,6 +24,7 @@ Setting up a new project from scratch:
 2. [Options Pattern](options-pattern.md): how to read them safely in code.
 3. [Database Setup & AppDbContext](database-setup-efcore.md): connect the app to the database.
 4. [EF Core and Fluent API Cheat Sheet](EF%20Core%20and%20Fluent%20API%20Cheat%20Sheet.md): day-to-day querying and model configuration.
+5. [Dockerizing an ASP.NET Core App](dotnet-docker.md): package and run it in a container.
 
 ## Quick lookup
 
@@ -39,3 +41,6 @@ Setting up a new project from scratch:
 | Configure relationships and delete behavior | [Fluent API configuration](EF%20Core%20and%20Fluent%20API%20Cheat%20Sheet.md#fluent-api-configuration) |
 | Page, filter or project a query | [Everyday query patterns](EF%20Core%20and%20Fluent%20API%20Cheat%20Sheet.md#everyday-query-patterns) |
 | Fix slow queries or N+1 problems | [Common gotchas](EF%20Core%20and%20Fluent%20API%20Cheat%20Sheet.md#common-gotchas) |
+| Containerize the API | [Dockerizing an ASP.NET Core App](dotnet-docker.md) |
+| Run the API with a database in Compose | [Running with a database](dotnet-docker.md#running-with-a-database-compose) |
+| Run EF migrations for a containerized app | [Applying EF Core migrations](dotnet-docker.md#applying-ef-core-migrations) |

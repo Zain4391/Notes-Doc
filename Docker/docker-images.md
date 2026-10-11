@@ -1,18 +1,36 @@
 # Docker Images
 
-**Status: Covered — Phase 2 (Node, Spring Boot, .NET)**
+Building small, cache-friendly images: the multi-stage pattern and how it applies to Node, Spring Boot and .NET, plus tagging and registry commands.
+
+Related: [Dockerfile Basics](dockerfile-basics.md) · [Security](docker-security.md) · [Troubleshooting](docker-troubleshooting.md)
+
+**Contents**
+
+1. [Multi-stage builds](#multi-stage-builds)
+2. [Node / TypeScript](#node--typescript)
+3. [Spring Boot: layered JARs](#spring-boot-layered-jars)
+4. [.NET: SDK vs runtime](#net-sdk-vs-runtime)
+5. [Tagging and registry commands](#tagging-and-registry-commands)
+6. [Pitfalls](#pitfalls)
 
 ---
 
-## Multi-stage builds — the general pattern
+## Multi-stage builds
 
-Build stage compiles/installs everything needed to produce the artifact; runtime stage copies **only** the final artifact into a slim base image. Nothing from the build toolchain (compilers, dev dependencies, source files) ends up in the shipped image.
+A multi-stage build uses one stage to compile or install everything needed to produce the artifact, and a second stage that copies **only the final artifact** into a slim base image. Nothing from the build toolchain (compilers, dev dependencies, source files) ends up in the shipped image.
+
+| Stage | Contains | Shipped? |
+|---|---|---|
+| Build | SDK or compiler, dev dependencies, source code | No |
+| Runtime | Slim base image and the built artifact | Yes |
+
+## Node / TypeScript
 
 ```dockerfile
 # Stage 1: builder
 FROM node:20 AS builder
 WORKDIR /app
-COPY package*.json .
+COPY package*.json ./
 RUN npm install
 COPY . .
 RUN npm run build
@@ -20,24 +38,23 @@ RUN npm run build
 # Stage 2: runtime
 FROM node:20-alpine
 WORKDIR /app
-COPY package*.json .
+COPY package*.json ./
 RUN npm install --omit=dev
 COPY --from=builder /app/dist ./dist
 EXPOSE 3000
 CMD ["node", "dist/app.js"]
 ```
 
-Real result on my Node/TS project: **1.59GB → 240MB** after splitting build vs runtime stages.
+**Measured result** on a Node/TypeScript project: **1.59 GB → 240 MB** after splitting build and runtime stages.
 
-**Gotcha I hit:** `CMD` pointed at the wrong compiled path — check `tsconfig.json`'s `rootDir`/`outDir` to know exactly where `tsc` actually puts output before writing `CMD`.
+> **Check the output path.** Look at `tsconfig.json`'s `rootDir` / `outDir` to see exactly where `tsc` puts compiled output *before* writing `CMD`. A wrong path is a common cause of a container that exits immediately.
 
----
+## Spring Boot: layered JARs
 
-## Spring Boot — layered JARs
+A Spring Boot JAR is a single zip of everything. The `layertools` mode splits it into independently cacheable layers, so a code change does not force Docker to re-copy your dependencies.
 
-A Spring Boot JAR is just a zip of everything mashed together. `layertools` splits it into independently-cacheable layers so a code change doesn't force Docker to re-copy your dependencies.
+Enable layers in `pom.xml`:
 
-Enable in `pom.xml`:
 ```xml
 <plugin>
   <groupId>org.springframework.boot</groupId>
@@ -68,20 +85,21 @@ EXPOSE 8080
 ENTRYPOINT ["java", "-cp", "spring-boot-loader", "org.springframework.boot.loader.launch.JarLauncher"]
 ```
 
-**Why this COPY order:** `dependencies/` is the biggest and almost never changes — put it first so it stays cached. `application/` is your compiled code, changes every build — put it last.
+**Why this `COPY` order:** `dependencies/` is the largest layer and almost never changes, so it goes first and stays cached. `application/` is your compiled code and changes on every build, so it goes last.
 
-**Proved myself:** `springboot-full-v5` (single COPY) and `springboot-layered-v1` (layered) were both **324MB** — identical disk size. Layering isn't about shrinking the image, it's entirely about rebuild/push speed via cache reuse.
+**Layering does not shrink the image.** A single-`COPY` build (`springboot-full-v5`) and a layered build (`springboot-layered-v1`) were both **324 MB**. The benefit is entirely faster rebuilds and pushes through cache reuse.
 
-**Real bugs debugged:** a Docker Desktop BuildKit/attestation engine bug, `JarLauncher` needing `-cp spring-boot-loader` in the entrypoint (not just the bare class), and a manifest-resolution failure caused by copying the jar before it existed on disk (`mvn package` had already run, so `layertools extract` needed the real built jar path — not an assumed one).
+Points to remember:
 
----
+- `ENTRYPOINT` needs `-cp spring-boot-loader` as well as the `JarLauncher` class name.
+- `layertools extract` must point at the jar that `mvn package` actually produced, so run it after the package step.
 
-## .NET — SDK vs runtime split
+## .NET: SDK vs runtime
 
 ```dockerfile
 FROM mcr.microsoft.com/dotnet/sdk:8.0 AS build
 WORKDIR /src
-COPY *.csproj .
+COPY *.csproj ./
 RUN dotnet restore
 COPY . .
 RUN dotnet publish -c Release -o /app/publish
@@ -93,25 +111,36 @@ USER app
 ENTRYPOINT ["dotnet", "DemoApi.dll"]
 ```
 
-- `.csproj`-first `COPY` before full source, same caching reasoning as Node/`package.json`.
-- `dotnet publish` (not just `build`) — produces the actual deployable output.
-- Microsoft's ASP.NET runtime base image ships a **pre-built non-root `app` user (UID 1654)** — no need to create your own.
-- `--chown=app:app` on the `COPY` (while still root) + `USER app` **after** — copy first as root, then drop privileges.
+| Detail | Why |
+|---|---|
+| `COPY *.csproj` before the full source | Same caching reasoning as `package.json` in Node: restore is only re-run when dependencies change |
+| `dotnet publish`, not just `build` | Produces the actual deployable output |
+| Pre-built `app` user (UID 1654) | Microsoft's ASP.NET runtime image already includes a non-root user; no need to create one |
+| `--chown=app:app` on `COPY`, then `USER app` **after** | Copy first as root, then drop privileges |
+| `ENTRYPOINT` DLL name | Linux file names are **case-sensitive**: `DemoAPI.dll` and `DemoApi.dll` are different files |
 
-**Real bugs debugged:** a live routing bug that looked Docker-related but wasn't (unregistered `/` route + `ASPNETCORE_ENVIRONMENT`), and a deliberate `DemoAPI.dll` vs `DemoApi.dll` typo proving **Linux filesystems are case-sensitive** while NTFS (Windows) isn't — a mismatch that works fine on your Windows host but fails inside the Linux container.
+A full walkthrough with improvements, port and environment behavior, and a Compose setup with a database is in [Dockerizing an ASP.NET Core App](../Dotnet/dotnet-docker.md). For configuring the app inside the container (environment, secrets), see [Configuration & Environments](../Dotnet/configuration-env.md).
 
----
-
-## General tagging & registry commands
+## Tagging and registry commands
 
 ```bash
 docker build -t myapp:1.0 .
 docker tag myapp:1.0 myregistry/myapp:1.0
 docker push myregistry/myapp:1.0
-docker images                 # compare sizes across build iterations
+docker images                                              # compare sizes across build iterations
 docker inspect <image> --format='{{.Config.Entrypoint}}'   # verify what actually got baked in
 ```
 
+## Pitfalls
+
+| Symptom | Cause | Where it is explained |
+|---|---|---|
+| Container exits immediately, file not found | `CMD` points at the wrong compiled path | [Troubleshooting](docker-troubleshooting.md) |
+| `JarLauncher` cannot find its classes | Missing `-cp spring-boot-loader` | [Troubleshooting](docker-troubleshooting.md) |
+| `layertools extract` fails | Wrong or not-yet-existing jar path | [Troubleshooting](docker-troubleshooting.md) |
+| `dll` not found only in the container | Case mismatch that NTFS tolerates but Linux does not | [Troubleshooting](docker-troubleshooting.md) |
+| Odd build errors on Docker Desktop | A BuildKit / attestation engine bug, not the Dockerfile | [Troubleshooting](docker-troubleshooting.md) |
+
 ---
 
-[[README|← Back to Docker index]]
+[← Back to Docker index](README.md)
