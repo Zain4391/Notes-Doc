@@ -14,7 +14,7 @@ The vault is plain Markdown, so it reads the same on GitHub and in [Obsidian](ht
 |---|---|---|
 | [Angular](Angular/) | Setup, core concepts, routing, forms, services and HTTP | [basic-setup.md](Angular/basic-setup.md) |
 | [Dotnet](Dotnet/) | ASP.NET Core configuration, options pattern, EF Core (setup and Fluent API cheat sheet), Docker | [README.md](Dotnet/README.md) |
-| [nest-js](nest-js/) | Modules, controllers, services, custom exceptions, JWT authentication, TypeORM, RabbitMQ | [nest-core.md](nest-js/nest-core.md) |
+| [Nest](Nest/) | Modules, controllers, services, custom exceptions, JWT authentication and RBAC, TypeORM, RabbitMQ | [README.md](Nest/README.md) |
 | [Next](Next/) | Overview and routing, data fetching, Axios client, React Query hooks, custom hooks, NextAuth, Zod + React Hook Form, TypeScript patterns | [next-overview.md](Next/next-overview.md) |
 | [React](React/) | Project setup with Vite and Tailwind CSS | [React Setup - Vite with TailwindCSS.md](React/React%20Setup%20-%20Vite%20with%20TailwindCSS.md) |
 | [Zustand](Zustand/) | Client state management | [overview.md](Zustand/overview.md) |
@@ -27,10 +27,16 @@ The vault is plain Markdown, so it reads the same on GitHub and in [Obsidian](ht
 | [Powershell](Powershell/) | Command reference with every common flag explained | [README.md](Powershell/README.md) |
 | [linux-manjaro-commands](linux-manjaro-commands/) | Manjaro / Arch package management | [update-packages.md](linux-manjaro-commands/update-packages.md) |
 
+### Architecture
+
+| Folder | Covers | Start with |
+|---|---|---|
+| [Microservices](Microservices/) | Monolith vs microservices, service boundaries, API gateway, service discovery, configuration, a full reference architecture, all with Mermaid diagrams | [README.md](Microservices/README.md) |
+
 ## How the notes are organised
 
 - One folder per technology; one Markdown file per topic.
-- Folders with several files have (or should get) a `README.md` that acts as an index, with a reading order and a "I need to..." lookup table. [Docker](Docker/README.md), [Dotnet](Dotnet/README.md) and [Powershell](Powershell/README.md) are the model to follow.
+- Folders with several files have (or should get) a `README.md` that acts as an index, with a reading order and a "I need to..." lookup table. [Docker](Docker/README.md), [Dotnet](Dotnet/README.md), [Nest](Nest/README.md) and [Powershell](Powershell/README.md) are the model to follow.
 - Notes are written as documentation, not throwaway code blocks: explain *what* and *why*, then show the command or code.
 - Cross-link related notes with relative links, e.g. `[Dockerizing an ASP.NET Core App](../Dotnet/dotnet-docker.md)`.
 
@@ -46,13 +52,14 @@ The vault is plain Markdown, so it reads the same on GitHub and in [Obsidian](ht
 
 | Item | Convention |
 |---|---|
-| New folders | Technology name, e.g. `Powershell/`. Existing folders mix capitalised names and `kebab-case` (`nest-js`, `linux-manjaro-commands`); keep an existing name rather than rename it, since renames break links. |
+| New folders | Technology name, e.g. `Powershell/`. Existing folders mix capitalised names and `kebab-case` (`linux-manjaro-commands`); keep an existing name rather than rename it, since renames break links. |
 | New files | Lowercase `kebab-case`, e.g. `docker-networking.md`. A few older files use spaces and capitals; those are linked with `%20` in URLs. |
 | Folder index | `README.md` |
+| Diagrams | Mermaid in ```` ```mermaid ```` blocks (renders in Obsidian and on GitHub); colors and types are explained in [Microservices/README.md](Microservices/README.md) |
 | Code blocks | Always include the language (`bash`, `powershell`, `ts`, `csharp`, `yaml`, …) |
 | Headings | One `#` title per file, then `##` sections. Don't skip levels. |
 | `.obsidian/` | Git-ignored; editor settings stay local. |
 
 ## Status
 
-Some folders are still single-topic or lack an index, and are candidates for the same treatment the Docker, Dotnet and Powershell notes received: [Angular](Angular/), [nest-js](nest-js/), [Next](Next/), [React](React/), [Zustand](Zustand/) and [linux-manjaro-commands](linux-manjaro-commands/).
+Some folders are still single-topic or lack an index, and are candidates for the same treatment the Docker, Dotnet, Nest and Powershell notes received: [Angular](Angular/), [Next](Next/), [React](React/), [Zustand](Zustand/) and [linux-manjaro-commands](linux-manjaro-commands/).
