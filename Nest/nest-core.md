@@ -38,6 +38,8 @@ AppModule (root)
 └── imports ──► OrdersModule (can inject BooksService because it is exported)
 ```
 
+Read the tree top-down: `AppModule` imports `BooksModule`, whose controller calls its own service. `BooksService` is exported, so `OrdersModule` (also imported by `AppModule`) can inject it. If the export were missing, the same injection would fail with a dependency-resolution error.
+
 ---
 
 ## Modules
@@ -52,6 +54,12 @@ A module is an organizational boundary and a unit of composition. Its metadata d
 })
 export class BooksModule {}
 ```
+
+**How it works**
+
+- `controllers` registers `BooksController`, so its routes become part of the application.
+- `providers` tells Nest's DI container to create one `BooksService` and keep it available inside this module.
+- `exports` makes that provider usable by any module that imports `BooksModule`. Without it, `BooksService` stays private to this module.
 
 ### `@Module()` metadata
 

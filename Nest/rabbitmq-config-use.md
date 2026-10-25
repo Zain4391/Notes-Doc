@@ -134,6 +134,15 @@ export const QUEUE_CONFIGS = {
 };
 ```
 
+**How it works**
+
+- `getRabbitMQConfig(config)` builds the options for **one** listener from a queue name and the routing keys (events) it cares about. Calling it three times gives three independent listeners.
+- `queue` is that service's own queue; `exchange`, `exchangeType` and `routingKey` describe the topic exchange and which keys bind this queue to it.
+- `queueOptions.durable` keeps the queue after a broker restart, and the `x-message-ttl` argument discards messages that nobody consumed within 24 hours.
+- `noAck: false` means the consumer must acknowledge each message; one that is never acknowledged is redelivered.
+- `as unknown as RmqOptions` casts the object to the type the transport expects. It silences a typing mismatch; remove it if your Nest version's typings already accept these fields.
+- `QUEUE_CONFIGS` is the single place that decides **who listens to what**. Each entry falls back to a default queue name if the environment variable is missing.
+
 ### Options
 
 | Option | Description |
@@ -348,6 +357,13 @@ export abstract class BaseEventDTO {
 }
 ```
 
+**How it works**
+
+- Every event inherits three fields: `eventId` (unique per event, useful for logs and for ignoring duplicates), `timestamp` (when it was created) and `eventType` (the routing key).
+- The base constructor fills `eventId` and `timestamp` automatically, so a publisher never sets them by hand.
+- `abstract` means the base class cannot be instantiated directly; only concrete events can.
+- The decorators document and enforce the shape when the DTO is validated, for example on the consumer side.
+
 ### Order events
 
 ```ts
@@ -381,6 +397,13 @@ export class OrderPlacementEvent extends BaseEventDTO {
 }
 ```
 
+**How it works**
+
+- The constructor takes a `Partial<OrderPlacementEvent>`, so the caller passes only the business fields: `new OrderPlacementEvent({ orderId, customerId, ... })`.
+- `super()` runs first (it creates `eventId` and `timestamp`), then `Object.assign(this, partial)` copies the supplied fields, then `eventType` is set to `'order.placed'`. Assigning it last means a caller cannot override it by accident.
+- `items` is an array of nested objects. `@ValidateNested({ each: true })` validates each item, and `@Type(() => OrderItemDTO)` tells `class-transformer` how to build those items, otherwise they stay plain objects and are not checked.
+- `specialInstruction` is optional (`?` and `@IsOptional()`).
+
 ### Restaurant events
 
 ```ts
@@ -400,6 +423,8 @@ export class OrderConfirmedEvent extends BaseEventDTO {
 }
 ```
 
+Emitted by the **Restaurants** service when it accepts an order and has estimated a delivery time. The **Orders** service receives it on its queue and moves the order to confirmed. It carries only identifiers and the estimate, not the whole order.
+
 ```ts
 import { IsString, IsUUID } from 'class-validator';
 import { BaseEventDTO } from 'src/common/events/base-event.dto';
@@ -416,6 +441,8 @@ export class OrderReadyEvent extends BaseEventDTO {
   }
 }
 ```
+
+Emitted by **Restaurants** when the food is ready. The **Delivery** service receives it and looks for a driver. It includes `deliveryAddress` so Delivery does not have to ask Orders for it.
 
 ### Delivery events
 
@@ -440,6 +467,8 @@ export class DriverAssignedEvent extends BaseEventDTO {
 }
 ```
 
+Emitted by **Delivery** after it picks a driver. The **Orders** service stores the driver and the estimate. `assignedAt` is set in the constructor, so the event always records the moment it was created.
+
 ```ts
 import { IsDateString, IsUUID } from 'class-validator';
 import { BaseEventDTO } from 'src/common/events/base-event.dto';
@@ -457,6 +486,8 @@ export class OrderDeliveredEvent extends BaseEventDTO {
   }
 }
 ```
+
+Emitted by **Delivery** when the order reaches the customer. `deliveredAt` is generated in the constructor. **Orders** uses it to close the order.
 
 ```ts
 import { IsDateString, IsUUID } from 'class-validator';
@@ -476,6 +507,8 @@ export class OrderPickedUpEvent extends BaseEventDTO {
   }
 }
 ```
+
+Emitted by **Delivery** when the driver collects the order. It includes `customerId` so a notification can be addressed without another lookup. In the listener config above only the `DELIVERY` queue is bound to this key, so add it to `ORDERS` if the Orders service should react.
 
 ### Event summary
 
@@ -500,6 +533,8 @@ Emit from the service method after the business logic has completed.
 this.rabbitMQService.emitEvent('<EVENT_TYPE>', event);
 ```
 
+`emitEvent` takes the **routing key** and the event object. The key decides which queues receive the message; the object is the payload. The placeholder `<EVENT_TYPE>` must be replaced by a key such as `'order.placed'`, and the same string must appear in the consumer's `@EventPattern` and in its `routingKeys`.
+
 ### Example
 
 ```ts
@@ -514,6 +549,15 @@ const event = new OrderPlacementEvent({
 
 this.rabbitMQService.emitEvent('order.placed', event);
 ```
+
+**How it works**
+
+1. The service finishes its own work first (the order is saved), then builds the event from the saved order.
+2. `new OrderPlacementEvent({...})` fills the business fields; the constructor adds `eventId`, `timestamp` and `eventType = 'order.placed'`.
+3. `emitEvent('order.placed', event)` publishes it with the routing key `order.placed`. The broker delivers it to every queue bound to that key (here the Restaurants queue).
+4. `emit` is fire and forget: the call does not wait for a consumer and returns no result, so the order flow does not fail if Restaurants is down.
+
+Emit **after** the database write succeeds. Otherwise other services could react to an order that was never saved.
 
 Inject `RabbitMQService` into the service constructor, and import `RabbitMQModule` in the module that uses it.
 

@@ -89,6 +89,13 @@ remove(@Param('id') id: string) {
 }
 ```
 
+**How it works**
+
+- Every handler is a plain method; the decorator on top decides the HTTP method and the path (`:id` is a placeholder that becomes the route parameter).
+- `@Put(':id')` and `@Patch(':id')` look the same in code. The difference is the contract: PUT **replaces** the whole resource, so the body must be complete; PATCH changes **only the fields sent**. Nest does not enforce this, your service logic does.
+- `@Body()` hands the handler the request body as a typed DTO, and `@Param('id')` hands it the matching path segment.
+- The handlers return strings only to keep the example short. In a real controller they return whatever the service returns, and Nest serializes it (objects and arrays become JSON).
+
 ---
 
 ## Route parameters
@@ -170,6 +177,12 @@ findAll(@Query() query: ListAllEntities) {
 }
 ```
 
+**How it works**
+
+- `@Query('limit')` reads one named key from the query string. `@Query()` with no name returns every key as an object, which is the form you pair with a DTO.
+- Query-string values always arrive as **strings**: `limit` is `"10"`, not `10`. Convert with `ParseIntPipe` or a DTO with `@Type(() => Number)`.
+- A parameter that is not in the URL is `undefined`, so give it a default or mark it optional.
+
 ---
 
 ## Request body
@@ -200,6 +213,12 @@ async signupUser(@Body() userData: { name?: string; email: string }) {
   return this.userService.createUser(userData);
 }
 ```
+
+**How it works**
+
+- `@Body() createCatDto: CreateCatDto` gives you the whole parsed JSON body. Typing it with a **class** lets `ValidationPipe` check it against the DTO's decorators (see [Validation with ValidationPipe](#validation-with-validationpipe)).
+- `@Body('name')` pulls out a single property. It is quick, but each property is then validated on its own and you lose the single DTO that documents the request shape.
+- The inline type `{ name?: string; email: string }` only helps the compiler. Types vanish at runtime, so nothing is validated; use a DTO class for real input.
 
 ---
 
@@ -232,6 +251,12 @@ findAll(
 }
 ```
 
+**How it works**
+
+- Each decorator pulls one thing out of the request and passes it as a normal argument, so the handler does not have to touch `req` directly.
+- `@Headers('user-agent')` reads a single header (header names are matched case-insensitively), and `@Ip()` reads the client address.
+- `@Req()` gives the raw request. It is handy for rarely needed details, but ties the handler to Express or Fastify, so prefer the specific decorators when one exists.
+
 ---
 
 ## HTTP status codes
@@ -249,6 +274,8 @@ create() {
   return 'This action adds a new cat';
 }
 ```
+
+`@HttpCode(204)` overrides the default status (201 for POST). A `204 No Content` response carries no body, so a handler using it should return nothing; the string returned here would not be sent.
 
 ### `@Res()`: manual control
 
@@ -271,6 +298,12 @@ export class CatsController {
   }
 }
 ```
+
+**How it works**
+
+- Injecting `@Res() res` switches that handler into **library-specific mode**: Nest stops sending the return value and you must end the response yourself (`send()`, `json()`).
+- `res.status(HttpStatus.CREATED)` sets the status; `HttpStatus` gives readable names instead of bare numbers.
+- Interceptors and `@HttpCode()`/`@Header()` no longer apply to this handler. If you only need the response object for something small, use `@Res({ passthrough: true })` and keep returning values normally.
 
 ### `HttpStatus` enum
 
@@ -306,6 +339,8 @@ create() {
 }
 ```
 
+`@Header(name, value)` sets a fixed response header. Stacked decorators each add one header, and they run for every response from this handler. For headers that depend on the data (an ETag, a `Location` pointing at a new id), set them from the handler with `@Res({ passthrough: true })` instead.
+
 ---
 
 ## Guards
@@ -335,6 +370,12 @@ export class CatsController {
 }
 ```
 
+**How it works**
+
+- `@UseGuards(AuthGuard)` attaches the guard to this one route. Nest runs the guard before the handler.
+- The guard's `canActivate()` returns `true` to let the request through. Returning `false` or throwing (for example `UnauthorizedException`) stops it, and the handler never runs.
+- Passing the class (not `new AuthGuard()`) lets Nest create it and inject its dependencies.
+
 ### Controller level
 
 ```ts
@@ -353,6 +394,8 @@ export class CatsController {
 }
 ```
 
+Putting `@UseGuards` on the class protects **every** route in the controller, here both `findAll` and `create`. This is the right place for a guard that all routes need; add method-level guards only for the extra checks.
+
 ### Multiple guards
 
 ```ts
@@ -362,6 +405,8 @@ findAll() {
   return 'Protected by both guards';
 }
 ```
+
+With several guards, Nest runs them **in the order listed** and the request must pass all of them. `AuthGuard` runs first (it sets `request.user`), then `RolesGuard` can read that user. Reversing the order would make `RolesGuard` run without a user.
 
 ### Global guard
 
@@ -375,6 +420,8 @@ async function bootstrap() {
 }
 bootstrap();
 ```
+
+`useGlobalGuards` applies the guard to every route in the application. Because the guard is created with `new` outside any module, it **cannot use dependency injection**. If the guard needs a service (a `JwtService`, a repository), register it with the `APP_GUARD` provider shown next, which Nest builds with full DI.
 
 In `app.module.ts` (supports dependency injection):
 
@@ -394,6 +441,12 @@ import { AuthGuard } from './auth.guard';
 export class AppModule {}
 ```
 
+**How it works**
+
+- `provide: APP_GUARD` is a special token. Nest sees it and applies the `useClass` guard to **every** route, the same effect as `useGlobalGuards`.
+- Because Nest creates the guard, it can use **dependency injection** (for example a `JwtService` or `Reflector`), which `new AuthGuard()` in `main.ts` cannot.
+- Prefer this form whenever the guard has dependencies.
+
 ---
 
 ## Pipes
@@ -407,6 +460,8 @@ findOne(@Param('id', ParseIntPipe) id: number) {
   // id is automatically converted to a number
 }
 ```
+
+`ParseIntPipe` runs before the handler: it converts the string `"42"` to the number `42`, and rejects `"abc"` with a `400 Bad Request` before your code runs. The handler can therefore treat `id` as a real number.
 
 ### Built-in Pipes
 
@@ -434,7 +489,7 @@ findAll(@Query('active', ParseBoolPipe) active: boolean) {
 }
 
 @Get()
-findByIds(@Query('ids', ParseArrayPipe) ids: number[]) {
+findByIds(@Query('ids', new ParseArrayPipe({ items: Number, separator: ',' })) ids: number[]) {
   return this.catsService.findByIds(ids);
 }
 
@@ -448,6 +503,12 @@ findByPrice(@Query('price', ParseFloatPipe) price: number) {
   return this.catsService.findByPrice(price);
 }
 ```
+
+**How to read these handlers**
+
+- Each handler asks for one value and names the pipe that converts it: `ParseIntPipe` for `id`, `ParseBoolPipe` for `active`, `ParseArrayPipe` for `ids`, `ParseUUIDPipe` for a UUID, `ParseFloatPipe` for `price`.
+- The pipe runs **before** the handler. A failed conversion returns `400 Bad Request`, so the service only ever sees valid, correctly typed values.
+- `ParseBoolPipe` accepts the text `true` and `false`. `ParseArrayPipe` splits a string on a separator (`,` by default), so `ids=1,2,3` becomes an array; it needs `items: Number` to convert each element, which is why that one handler creates it with `new ParseArrayPipe({ items: Number, separator: ',' })`.
 
 `ParseEnumPipe` needs the enum, so it is instantiated with `new`:
 
@@ -463,6 +524,12 @@ findByStatus(@Query('status', new ParseEnumPipe(Status)) status: Status) {
 }
 ```
 
+**How it works**
+
+- The pipe checks that the `status` query value is one of the enum's values (`active` or `inactive`); anything else returns `400`.
+- It is created with `new` because it needs the enum as an argument. Pipes without arguments (like `ParseIntPipe`) can be passed as a class.
+- The parameter is typed `Status`, so inside the handler the value is already narrowed to the enum.
+
 ### Combining pipes on several parameters
 
 ```ts
@@ -475,6 +542,8 @@ findOne(
   return this.catsService.findOne(id, sort, limit);
 }
 ```
+
+Each parameter has its own pipe: `id` becomes a number, `sort` a boolean, `limit` a number. They are applied independently, and the **first failure** returns `400` for the whole request. After the pipes, the `typeof` checks all hold.
 
 ---
 
@@ -502,6 +571,8 @@ async function bootstrap() {
 }
 bootstrap();
 ```
+
+Registering `ValidationPipe` globally validates **every** incoming `@Body()`, `@Query()` and `@Param()` that is typed with a DTO class. Without this line (or a `@UsePipes` on the controller), the decorators in your DTOs are never checked.
 
 ### Define a DTO
 
@@ -532,6 +603,17 @@ export class CreateUserDto {
 }
 ```
 
+**What each rule enforces**
+
+| Property | Rules | Rejected examples |
+|---|---|---|
+| `name` | non-empty string | `""`, `123`, missing |
+| `age` | integer between 0 and 20 | `-1`, `21`, `3.5`, `"3"` (a string) |
+| `breed` | string | `5`, missing |
+| `email` (`CreateUserDto`) | valid email address | `"not-an-email"` |
+
+Decorators on one property are combined with AND: all must pass. A failed request returns `400` with one message per broken rule, for example `age must not be greater than 20`.
+
 ### Use it in a controller
 
 ```ts
@@ -541,6 +623,8 @@ create(@Body() createCatDto: CreateCatDto) {
   return this.catsService.create(createCatDto);
 }
 ```
+
+By the time `create` runs, the body has already passed the DTO rules, so the method only deals with valid data. When it fails, `ValidationPipe` throws `BadRequestException` before the handler starts, which your [global exception filter](custom-exception.md) can format.
 
 ### Custom ValidationPipe
 
@@ -571,6 +655,16 @@ export class ValidationPipe implements PipeTransform<any> {
   }
 }
 ```
+
+**How it works**
+
+1. `metatype` is the type declared on the parameter (`CreateCatDto`). Nest supplies it through `ArgumentMetadata`.
+2. `toValidate` skips plain types (`String`, `Number`, `Object`...), because there are no decorators to check on them.
+3. `plainToInstance` turns the raw JSON object into a real `CreateCatDto` instance. Without that step `class-validator` would have no decorators to read.
+4. `validate(object)` runs every decorator and returns a list of errors.
+5. Any error throws `BadRequestException`; otherwise the original value is returned.
+
+This is a simplified version of what the built-in `ValidationPipe` does. The built-in one also supports `whitelist`, `transform` and detailed error messages, so use it in real code.
 
 ---
 
@@ -611,6 +705,13 @@ address: AddressDto;
 @IsString()
 description?: string;
 ```
+
+**How it works**
+
+- Decorators are stacked on one property and **all** must pass.
+- Choose the family that matches the type: string rules (`@MinLength`, `@IsEmail`), number rules (`@Min`, `@IsPositive`), `@IsBoolean`, `@IsDate`, array rules (`@ArrayMinSize`).
+- `@ValidateNested()` validates an object inside the DTO, and it needs `@Type(() => AddressDto)` so `class-transformer` can build that inner object.
+- `@IsOptional()` skips the remaining checks when the value is `undefined` or `null`; without it a missing property fails every rule on it.
 
 ---
 

@@ -100,6 +100,17 @@ src/
     └── delivery-drivers.controller.ts
 ```
 
+| Folder or file | Role |
+|---|---|
+| `constants.ts` | Secrets and token lifetime |
+| `dto/` | Input DTOs (login, register) and output DTOs (what the client sees) |
+| `strategies/` | One Passport strategy per user type: verifies the token and loads the user |
+| `guards/` | Thin `AuthGuard` wrappers that route handlers use to trigger a strategy |
+| `decorators/` | `@CurrentUser()` and, later, `@Roles()` |
+| `types/` | `JwtPayload` and `AuthenticatedUser` |
+| `auth.*` | The module, service (register/login) and controller (public endpoints) |
+| `customers/`, `delivery-drivers/` | The user modules; auth reads their repositories |
+
 ---
 
 ## Core authentication files
@@ -140,6 +151,8 @@ export class LoginDto {
   password: string;
 }
 ```
+
+The login DTO checks only that the fields exist and look right (`@IsEmail`, non-empty password). Password **strength** is not checked here, because at login the rule is "does it match the stored hash", not "is it long enough".
 
 `src/auth/dto/register.dto.ts`
 
@@ -195,6 +208,13 @@ export class RegisterDriverDto {
 }
 ```
 
+**How it works**
+
+- Both DTOs share `name`, `email`, `password` and an optional `profile_image_url`. The rest is specific to the user type: a customer has an `address`, a driver has `phone` and `vehicle_type`.
+- `@MinLength(8)` on `password` enforces a minimum length **before** hashing; once hashed, length can no longer be checked.
+- `@IsEnum(VEHICLE_TYPE)` limits `vehicle_type` to the enum values (`bike`, `scooter`, `car`).
+- With `ValidationPipe` enabled, a request that breaks any rule gets a `400` and never reaches the service.
+
 ### Current user decorator
 
 `src/auth/decorators/current-user.decorator.ts`
@@ -211,6 +231,12 @@ export const CurrentUser = createParamDecorator(
   },
 );
 ```
+
+**How it works**
+
+- `createParamDecorator` builds a decorator you can use on a handler parameter.
+- Inside, `ctx.switchToHttp().getRequest()` gets the request, and the decorator returns `request.user`, which the JWT strategy set.
+- The handler writes `@CurrentUser() user` and never touches `req`. The `data` argument is unused here; it could be used for `@CurrentUser('id')` to return one property.
 
 Usage: `getProfile(@CurrentUser() user: AuthenticatedUser)`
 
@@ -265,6 +291,13 @@ export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-custome
 }
 ```
 
+**How it works**
+
+1. **Constructor:** configures Passport. The token is read from the `Authorization: Bearer ...` header, expired tokens are rejected, and the signature is checked with `customerSecret`. If the signature or expiry is wrong, Passport returns `401` before `validate` runs.
+2. **`validate(payload)`:** only runs for a **valid** token. `payload.sub` (the user ID set at login) is used to load the customer.
+3. If the customer no longer exists (deleted after the token was issued), `UnauthorizedException` is thrown.
+4. Otherwise the returned object becomes **`request.user`**, which `@CurrentUser()` reads. Return only what handlers need, never the password hash.
+
 ### Driver strategy
 
 `src/auth/strategies/jwt-driver.strategy.ts`
@@ -310,6 +343,8 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
 }
 ```
 
+Same flow as the customer strategy, but it checks the token against `driverSecret` and looks the user up in the drivers repository. Because each strategy has its own name (`'jwt-driver'`) and secret, a customer token fails on driver routes.
+
 ### Strategy options
 
 | Option | Description |
@@ -342,6 +377,8 @@ import { AuthGuard } from '@nestjs/passport';
 export class JwtDriverGuard extends AuthGuard('jwt-driver') {}
 ```
 
+A guard is just `AuthGuard('<strategy name>')` wrapped in a class. Using `@UseGuards(JwtDriverGuard)` on a route makes Nest run the `'jwt-driver'` strategy first: invalid or missing token gives `401`, valid token sets `request.user` and lets the handler run.
+
 ### Improvements
 
 1. Replace `payload: any` with a proper payload type.
@@ -370,6 +407,8 @@ export interface AuthenticatedUser {
   userType: 'customer' | 'driver';
 }
 ```
+
+`JwtPayload` is what is **signed into the token** (`sub` is the user ID by JWT convention). `AuthenticatedUser` is what a strategy's `validate()` **returns**, and so what ends up in `request.user`. They are separate types because the payload comes from the token while the user object is built from the database. Typing both removes the `any` from the strategies.
 
 ### Response DTOs
 
@@ -498,6 +537,12 @@ export class ApiErrorResponse {
   }
 }
 ```
+
+**How it works**
+
+- `ApiSuccessResponse<T>` wraps any payload as `{ success: true, data, message? }`, so every successful response has the same envelope. The generic `T` keeps the payload type: `new ApiSuccessResponse(customer, 'Created')`.
+- `ApiErrorResponse` mirrors the error format the global filter produces (`{ success: false, error: { message, statusCode, timestamp } }`). See [Custom Exceptions](custom-exception.md).
+- Constructors fill `success` and the timestamp, so callers cannot get them wrong.
 
 ---
 
@@ -776,6 +821,11 @@ import { Customer } from './entities/customer.entity';
 export class CustomersModule {}
 ```
 
+**How it works**
+
+- `TypeOrmModule.forFeature([Customer])` makes the `Customer` repository injectable inside this module.
+- `exports: [CustomersService, TypeOrmModule]` lets other modules (such as `AuthModule`) inject the service **and** the customer repository without declaring them again. The drivers module follows the same pattern for `DeliveryDriver`.
+
 ### Delivery drivers module
 
 `src/delivery-drivers/delivery-drivers.module.ts`
@@ -828,6 +878,13 @@ import { DeliveryDriver } from '../delivery-drivers/entities/delivery-driver.ent
 export class AuthModule {}
 ```
 
+**How it works**
+
+- `TypeOrmModule.forFeature([Customer, DeliveryDriver])` gives `AuthService` and the two strategies the repositories they need.
+- `PassportModule` enables the Passport integration that the guards and strategies depend on.
+- `JwtModule.register({})` provides `JwtService` for signing. It is empty on purpose: each `signAsync()` call passes the secret, so customers and drivers can use different ones.
+- Both strategies are **providers**: simply being registered here is what makes `AuthGuard('jwt-customer')` and `AuthGuard('jwt-driver')` work.
+
 > `JwtModule.register({})` is empty on purpose: each `signAsync()` call passes its own `secret`, which is how two user types use two secrets.
 
 ---
@@ -851,6 +908,8 @@ Request + JWT
   -> RolesGuard         (reads @Roles() metadata, compares with req.user.role)
   -> Handler            (or 403 Forbidden)
 ```
+
+Reading the flow: the client sends the token, `JwtCustomerGuard` verifies it and puts the user (with role) on `request.user`, then `RolesGuard` compares that role with the `@Roles()` metadata. A missing or wrong role ends the request with `403` before the handler runs.
 
 ---
 
@@ -1007,6 +1066,12 @@ getDashboard() {}
 getReports() {}
 ```
 
+**How it works**
+
+- `@Roles(...)` only **attaches metadata** to the handler; it does nothing on its own. The check happens when `RolesGuard` reads that metadata.
+- Several roles are combined with **OR**: `@Roles(Role.ADMIN, Role.MANAGER)` allows either.
+- Place it on a method to protect one route, or on the class to protect all of them.
+
 ---
 
 ## Roles guard
@@ -1056,6 +1121,8 @@ export class RolesGuard implements CanActivate {
   }
 }
 ```
+
+**Reading the guard top to bottom:** fetch the roles the route requires from its metadata, let the request through if there are none, make sure a user is present, then allow it when the user's role is **any one** of the required roles (`some`). The step-by-step table below summarizes the same logic.
 
 ### How the guard decides
 
@@ -1209,6 +1276,8 @@ export interface AuthenticatedUser {
   userType: 'customer' | 'driver';
 }
 ```
+
+`JwtPayload` now carries `role` so it is signed into the token, and `AuthenticatedUser` carries it so the guard can read `request.user.role`. Use the `Role` enum rather than `string` so a wrong role value is a compile error.
 
 ### Role in the JWT payload
 
@@ -1534,6 +1603,8 @@ Global authentication, route-level roles.
 app.useGlobalGuards(new JwtAuthGuard());
 ```
 
+The global guard authenticates every request. A route that must stay open is marked with `@Public()`; the guard reads that metadata through `Reflector` and skips the check. Role requirements are then added only where needed. The default becomes secure: a new route is protected until someone opts it out.
+
 ```ts
 @Controller('products')
 export class ProductsController {
@@ -1588,6 +1659,8 @@ export enum Permission {
 }
 ```
 
+Each permission is an action plus the thing it acts on (`create:user`, `delete:order`). Naming them `verb:resource` keeps the list readable and groupable as it grows. Using an enum gives autocomplete and prevents typos.
+
 `src/auth/constants/role-permissions.ts`
 
 ```ts
@@ -1624,6 +1697,12 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   ],
 };
 ```
+
+**How it works**
+
+- `Record<Role, Permission[]>` forces an entry for **every** role: adding a role to the `Role` enum without adding it here is a compile error.
+- `...Object.values(Permission)` gives admins every permission, including any added later.
+- The other roles list exactly what they may do, so changing what a role can do is a one-line edit in one file, with no change to controllers.
 
 `src/auth/decorators/permissions.decorator.ts`
 
@@ -1685,6 +1764,14 @@ export class PermissionsGuard implements CanActivate {
 }
 ```
 
+**How it works**
+
+1. Read the permissions required by the route from the `@RequirePermissions()` metadata.
+2. If none are required, allow the request.
+3. Look up the permissions of the user's role in `ROLE_PERMISSIONS` (an unknown role gives an empty list).
+4. `every(...)` requires **all** listed permissions, not just one.
+5. If something is missing, respond `403` and list what was required.
+
 Usage:
 
 ```ts
@@ -1739,6 +1826,8 @@ export class UsersController {
 @Roles('admin', 'manager')         // typo-prone, no autocomplete
 ```
 
+Strings compile with any spelling (`'admn'`), so the typo only shows up as users being denied. The enum catches it at compile time and lets the editor autocomplete, and renaming a role updates every use.
+
 ### 3. Prefer class-level guards when possible
 
 ```ts
@@ -1766,6 +1855,8 @@ export class AdminController {
 }
 ```
 
+The first version declares the guards and role once on the class, and every route inherits them. The second repeats them per route, which is easy to forget on a new route. Put shared rules at class level and add method-level `@Roles()` only for routes that differ.
+
 ### 4. Re-verify roles in the database for critical operations
 
 JWTs can go stale when a user's role changes.
@@ -1784,6 +1875,8 @@ async deleteUser(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser
 }
 ```
 
+The role in the JWT is a snapshot taken at login. If an admin is demoted, their existing token still says `admin` until it expires. For destructive or sensitive operations, load the user from the database and check the **current** role before acting.
+
 ### 5. Use descriptive error messages
 
 ```ts
@@ -1795,6 +1888,8 @@ throw new ForbiddenException(
 // Bad
 throw new ForbiddenException('Access denied');
 ```
+
+The good message lists the required roles and the caller's role, which makes a `403` self-explanatory during development. In production consider whether exposing role names to clients is acceptable; the generic message is safer for public APIs and the detailed one is useful for internal tools.
 
 ### 6. Document role requirements
 
@@ -1808,6 +1903,8 @@ throw new ForbiddenException('Access denied');
 @Roles(Role.ADMIN)
 async deleteUser(@Param('id') id: string) {}
 ```
+
+A short doc comment next to `@Roles()` records the security rule in plain words, so reviewers can see at a glance who is allowed to call the endpoint.
 
 ### 7. Test role-based access
 
@@ -1830,6 +1927,13 @@ describe('AdminController', () => {
   });
 });
 ```
+
+**How it works**
+
+- The tests send real HTTP requests to the app (`supertest`) with a `Bearer` token.
+- The first asserts that an admin token reaches the endpoint (`200`); the second asserts that a customer token is rejected (`403`).
+- The tokens here are placeholders. In a real test, sign them in a helper or log in through the auth endpoint.
+- Test both sides of every role rule: a role that should pass **and** one that should be denied.
 
 ---
 
@@ -1870,6 +1974,14 @@ if (!user || !user.role) {
   throw new ForbiddenException('User not authenticated');           // correct
 }
 ```
+
+Each pair shows the mistake first and the fix second.
+
+1. `@Roles()` without `RolesGuard` is just stored metadata, so every authenticated user gets in.
+2. `RolesGuard` placed first runs before `request.user` exists.
+3. A strategy that omits `role` makes `user.role` undefined, so every role check fails.
+4. Magic strings invite typos; use the enum.
+5. The guard should reject a request with no `user` explicitly instead of crashing on `undefined.role`.
 
 ---
 

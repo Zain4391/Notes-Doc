@@ -133,6 +133,8 @@ export class Customer {
 }
 ```
 
+The table has a UUID primary key, a unique `email` (the database rejects duplicates), an optional profile image, and a creation timestamp filled by `@CreateDateColumn()`. `password` holds a bcrypt **hash**, never the plain text.
+
 ### Delivery driver
 
 ```ts
@@ -175,6 +177,8 @@ export class DeliveryDriver {
 }
 ```
 
+Compared with `Customer`, a driver adds a `phone`, a `vehicle_type` restricted to the `VEHICLE_TYPE` enum, and `is_available` (default `true`), which the driver-specific service methods filter and toggle.
+
 ---
 
 ## Customers service
@@ -208,6 +212,8 @@ export class CreateCustomerDto {
   profile_image_url?: string;
 }
 ```
+
+The DTO describes exactly what a client may send to create a customer. Required text fields use `@IsString()` and `@IsNotEmpty()`, the email must be valid, the password needs at least 8 characters, and `profile_image_url` is optional. Anything not declared here is rejected when `whitelist`/`forbidNonWhitelisted` are on in `ValidationPipe`.
 
 `src/customers/dto/update-customer.dto.ts`
 
@@ -430,6 +436,15 @@ export class CustomersService {
 }
 ```
 
+**How the service is built**
+
+- **Create:** check the email is free (`ConflictException` if not), hash the password with bcrypt, then `create()` builds the entity and `save()` inserts it. Hashing happens in the service so no code path stores a plain password.
+- **findAll:** `skip = (page - 1) * limit` turns a page number into an offset. The QueryBuilder adds the search filter, the sort and `skip/take`, and `getManyAndCount()` returns the rows and the total in one go; the total gives `totalPages` and the `hasNextPage`/`hasPrevPage` flags.
+- **Sorting by a variable column** (`customer.${sortBy}`) is safe only because the DTO restricts `sortBy` with `@IsIn([...])`. Never interpolate unchecked user input into a query.
+- **update:** load the entity (`findOne` throws if it is missing), re-check the email only if it changed, re-hash a new password, merge with `Object.assign`, and `save`.
+- **remove vs softDelete:** `remove` deletes the row; `softDelete` sets a deletion timestamp instead, so the row is hidden but recoverable.
+- **ILike** is PostgreSQL's case-insensitive `LIKE`; `%text%` matches the text anywhere in the value.
+
 ### Method reference
 
 | Method | Purpose | Throws |
@@ -497,6 +512,8 @@ export class CreateDriverDto {
 }
 ```
 
+Same idea as the customer DTO, but with driver fields: `phone` is required and `vehicle_type` must be one of the enum values (`@IsEnum`). The service receives a typed, already validated object.
+
 `src/delivery-drivers/dto/update-driver.dto.ts`
 
 ```ts
@@ -511,6 +528,8 @@ export class UpdateDriverDto extends PartialType(CreateDriverDto) {
   is_available?: boolean;
 }
 ```
+
+`PartialType(CreateDriverDto)` makes every create field optional while keeping its validators. The class then adds only `is_available`, which does not exist on the create DTO. A client can send any subset of fields for a partial update.
 
 `src/delivery-drivers/dto/query-driver.dto.ts`
 
@@ -559,6 +578,8 @@ export class QueryDriverDto {
   vehicle_type?: VEHICLE_TYPE;
 }
 ```
+
+The driver query DTO extends the idea of the customer one with two filters. `is_available` arrives as the string `"true"` or `"false"` from the URL, so `@Transform` converts it to a real boolean before `@IsBoolean()` runs. `vehicle_type` is checked against the enum values with `@IsIn(Object.values(VEHICLE_TYPE))`. `sortBy` is a whitelist, which is what makes the dynamic `orderBy` safe.
 
 ### Service
 
@@ -742,6 +763,14 @@ export class DeliveryDriversService {
 }
 ```
 
+**What is specific to drivers**
+
+- `findAll` builds the same pagination as customers, then adds **optional filters**: each `andWhere` only applies if its value was provided, so the query grows only as needed. `is_available !== undefined` is used (not a truthiness check) so that `false` still filters.
+- `toggleAvailability` loads, flips the boolean and saves.
+- `findAvailableByVehicleType` sorts by `created_at` ascending, so the driver who has been waiting longest is first (first in, first out).
+- `getStatistics` runs two counts and a `GROUP BY`; `getRawMany()` returns plain rows (`vehicle_type`, `count`), and PostgreSQL returns counts as strings.
+- `bulkUpdateAvailability` is one `UPDATE ... WHERE id IN (...)` for many drivers, much cheaper than loading and saving each. `:...ids` expands the array into the `IN` list.
+
 ### Driver-specific methods
 
 | Method | Purpose |
@@ -804,6 +833,12 @@ export class CustomersService {
   }
 }
 ```
+
+**How it works**
+
+- `paginate(repository, options)` runs a count query and a page query for you and wraps the result in `{ items, meta, links }`.
+- `options` carries `page` and `limit`. The second call adds a third argument with normal `find` options (`order` here), so the sort applies before the page is cut.
+- `Pagination<Customer>` is the return type, which gives typed `items` and `meta`.
 
 ### Response format
 
@@ -883,6 +918,8 @@ export class PaginationQueryDto {
 }
 ```
 
+Query parameters arrive as strings, so `@Type(() => Number)` converts `page` and `limit` before `@IsInt()` runs. The `= 1` and `= 10` defaults apply when the parameter is absent (requires `transform: true`). `@Max(100)` caps the page size, and `@IsIn(...)` limits `sortBy` and `sortOrder` to safe values.
+
 `src/customers/customers.service.ts`
 
 ```ts
@@ -932,6 +969,13 @@ async findAllMinimal(options: IPaginationOptions): Promise<Pagination<Partial<Cu
 }
 ```
 
+**How it works**
+
+- `findAllAdvanced` builds a QueryBuilder with the same search and sort as before, then hands it to `paginate`. The package adds `skip`, `take` and the total itself, so you do not.
+- `route` is only used to build the `links` URLs in the response.
+- `findAllWithOrders` uses `leftJoinAndSelect` so each customer comes with its orders. Be careful with big pages: the join multiplies rows, so keep `limit` small.
+- `findAllMinimal` selects only three columns, which cuts the data read and sent (and avoids returning the password hash). The result type is `Pagination<Partial<Customer>>` because the entity is incomplete.
+
 ### Delivery drivers example
 
 `src/delivery-drivers/dto/driver-pagination-query.dto.ts`
@@ -979,6 +1023,8 @@ export class DriverPaginationQueryDto {
   sortOrder?: 'ASC' | 'DESC' = 'DESC';
 }
 ```
+
+The same pagination fields as the customer query DTO plus two filters, `is_available` (converted from the text `"true"` to a boolean) and `vehicle_type` (checked against the enum). Filters are optional, so the endpoint works with none, one or both.
 
 `src/delivery-drivers/delivery-drivers.service.ts`
 
@@ -1048,6 +1094,8 @@ export class DeliveryDriversService {
 }
 ```
 
+`findAll` applies the same optional filters as the manual version and ends with `paginate` instead of `skip/take`. `findAvailable` is a second, narrower query: only available drivers, optionally of one vehicle type, oldest first (FIFO) so the longest-waiting driver is offered first. Both return `Pagination<DeliveryDriver>`.
+
 ### Controllers
 
 `src/customers/customers.controller.ts`
@@ -1080,6 +1128,8 @@ export class CustomersController {
 }
 ```
 
+`GET /customers` takes the whole DTO; `GET /customers/minimal` reads `page` and `limit` as separate parameters. Those individual `@Query` values are **strings** at runtime, so for production code prefer the DTO form (or add `ParseIntPipe`). The controller returns the service result directly; the guard on the class makes every route require a customer token.
+
 `src/delivery-drivers/delivery-drivers.controller.ts`
 
 ```ts
@@ -1111,6 +1161,8 @@ export class DeliveryDriversController {
 }
 ```
 
+`GET /delivery-drivers` accepts the full filter DTO, while `GET /delivery-drivers/available` takes a few individual parameters and forwards them. The `vehicle_type as any` cast bypasses type checking; validate the value (a pipe or DTO) instead of casting it.
+
 > Individual `@Query('page')` values arrive as strings. Prefer the DTO approach (`@Query() query: Dto` with `@Type(() => Number)`), or add `ParseIntPipe`.
 
 ### API examples
@@ -1138,6 +1190,8 @@ const customOptions: IPaginationOptions = {
 await paginate<Customer>(repository, customOptions);
 ```
 
+`route` is the base URL used for `links.first`, `previous`, `next` and `last`. `cacheQueries: true` lets TypeORM cache the count query, which helps on large tables but means the total can be slightly stale. Pass either a relative or an absolute route depending on what clients need.
+
 ### Manual vs package
 
 ```ts
@@ -1150,6 +1204,8 @@ return { data, meta: { total, page, limit, totalPages } };
 // Package: automatic
 return paginate<Customer>(repository, { page, limit });
 ```
+
+The manual version needs four steps: offset, `findAndCount`, page math, then shaping the response, and every list endpoint repeats them. `paginate` does all of it and returns the same shape everywhere, so clients can rely on one response format.
 
 ### Custom response serialization
 
@@ -1177,6 +1233,13 @@ export class PaginationSerializer {
 }
 ```
 
+**How it works**
+
+- `serialize<T>` accepts a `Pagination<T>` and an optional `transformer`.
+- With a transformer each item is mapped (so you control exactly which fields leave the API); without one the items are returned as they are.
+- It reshapes the package's `meta` into friendlier names (`total`, `perPage`...) and derives `hasMorePages`.
+- Every endpoint using it then returns the same `{ success, data, pagination, links }` envelope.
+
 Usage:
 
 ```ts
@@ -1192,6 +1255,8 @@ async findAll(@Query() query: PaginationQueryDto) {
   }));
 }
 ```
+
+The controller asks the service for a page, then calls `serialize` with a mapping function. The mapper chooses which fields are exposed (here `id`, `name`, `email`), so the password hash and other internals never reach the response. The serializer reshapes `meta`, adds `hasMorePages` and keeps `links`.
 
 ### Performance tips
 
@@ -1286,6 +1351,13 @@ async findAllWithPagination(page: number = 1, limit: number = 10) {
 }
 ```
 
+**How it works**
+
+- `skip` is how many rows to skip; `take` is how many to return. Together they cut out one page.
+- `findAndCount` returns `[rows, total]` in one call, and the total gives `totalPages`.
+- `hasNextPage` and `hasPrevPage` tell the client whether to show next and previous buttons.
+- The database still has to walk past all skipped rows, so very deep pages get slower.
+
 ### 2. Cursor-based (infinite scroll)
 
 ```ts
@@ -1358,6 +1430,13 @@ async findAllAdvanced(queryDto: QueryDto) {
 }
 ```
 
+**How it works**
+
+- Defaults come from destructuring (`page = 1`), so missing parameters are safe.
+- `.where` is added only when `search` exists, and `ILIKE :search` uses a **named parameter**, which TypeORM sends separately from the SQL so user text cannot inject SQL.
+- The sort column goes through a **whitelist** (`allowedSortFields`) because column names cannot be parameterized; an unknown field is ignored rather than trusted.
+- `skip/take` and `getManyAndCount()` finish the page, and the meta mirrors the offset-based version.
+
 ---
 
 ## Sorting patterns
@@ -1369,6 +1448,8 @@ async findAll() {
   return await this.repository.find({ order: { created_at: 'DESC' } });
 }
 ```
+
+`find` accepts an `order` object mapping a column to `'ASC'` or `'DESC'`. Here the newest rows come first. TypeORM checks the keys against the entity at compile time.
 
 ### 2. Multiple fields
 
@@ -1382,6 +1463,8 @@ async findAll() {
   });
 }
 ```
+
+Keys are applied in the order written: first by `is_available` (true before false when `DESC`), then by `created_at` within each group. The order of keys in the object is the order of priority.
 
 ### 3. Dynamic sorting (query parameter)
 
@@ -1399,6 +1482,8 @@ async findAll(sortBy: string = 'created_at', sortOrder: 'ASC' | 'DESC' = 'DESC')
 }
 ```
 
+When `sortBy` comes from the URL, column names cannot be passed as query parameters, so the code **whitelists** them. Anything not in the list falls back to `created_at`. The computed key `[sortBy]` builds the `order` object at runtime.
+
 ### 4. Sorting with relations
 
 ```ts
@@ -1412,6 +1497,8 @@ async findAllWithRelations() {
 }
 ```
 
+`orderBy` sets the primary sort and `addOrderBy` adds tie-breakers. This sorts by the joined `order.total` first (largest first) and then by customer name. Sorting by a joined column needs the join (`leftJoinAndSelect`) to be present in the same query.
+
 ### 5. Case-insensitive sorting
 
 ```ts
@@ -1422,6 +1509,8 @@ async findAllCaseInsensitive() {
     .getMany();
 }
 ```
+
+Wrapping the column in `LOWER()` makes the sort ignore case, so `apple` and `Banana` sort alphabetically. Some database collations otherwise put all uppercase letters first. The function prevents a plain index on `name` from being used for the sort, so on large tables add a matching functional index.
 
 ---
 
@@ -1441,6 +1530,8 @@ async search(searchTerm: string) {
 }
 ```
 
+One named parameter `:term` is reused in all three `ILIKE` conditions, joined with `OR`, so a row matches when **any** field contains the text. The `%` wildcards on both sides make it a "contains" search; a leading wildcard cannot use a normal index, so prefer a full-text index for large tables.
+
 ### Date range filtering
 
 ```ts
@@ -1454,6 +1545,8 @@ async findByDateRange(startDate: Date, endDate: Date) {
     .getMany();
 }
 ```
+
+`BETWEEN :start AND :end` includes both ends. Passing `Date` objects as parameters lets the driver format them correctly. If `endDate` is a date without a time, it means midnight, so rows later that day are excluded; use the start of the next day with `<` for whole-day ranges.
 
 ### Conditional filters
 
@@ -1483,6 +1576,8 @@ async findWithFilters(filters: any) {
 }
 ```
 
+The query starts with no filters and each `if` adds one `andWhere` only when its value was supplied, so callers can combine any subset. TypeORM accepts `andWhere` as the first condition. Check `!== undefined` for booleans, otherwise a filter for `false` would be skipped.
+
 ### Aggregation
 
 ```ts
@@ -1496,6 +1591,12 @@ async getAggregatedData() {
     .getRawMany();
 }
 ```
+
+**How it works**
+
+- `select` + `addSelect` define the output columns instead of whole entities: the vehicle type, a total count, and a count of only the available drivers (`COUNT(CASE WHEN ... THEN 1 END)` counts only rows that match the condition).
+- `groupBy` collapses the rows to one per vehicle type.
+- `getRawMany()` returns plain objects, not entity instances, and PostgreSQL returns counts as strings (`"12"`), so convert them with `Number()` if you need numbers.
 
 ---
 
@@ -1521,6 +1622,12 @@ async findOne(id: string): Promise<Customer> {
   }
 }
 ```
+
+**How it works**
+
+- The not-found error is thrown **inside** the `try`, then the `catch` rethrows it unchanged (`instanceof NotFoundException`), so the client still gets a 404.
+- Any other error, such as a lost database connection, is replaced by a generic `InternalServerErrorException`, so internal details do not reach the client.
+- In practice a global exception filter already does this conversion, so you often do not need the `try/catch` at all (see [Custom Exceptions](custom-exception.md)).
 
 For domain-specific errors with a consistent response format, see `custom-exception.md`.
 
@@ -1625,6 +1732,14 @@ export class CustomersService {
 }
 ```
 
+**How it works**
+
+1. **Read:** build a key (`customer:42`) and ask the cache first. A hit returns immediately, with no database query.
+2. **Miss:** load from the database, throw `NotFoundException` if absent, then store the entity with a time to live.
+3. **Write:** after `update` saves the entity, the cached copy is **deleted**, so the next read fetches fresh data. Without this step readers would see stale data until the entry expires.
+
+Cache only data that is read far more than it changes, and always remove or refresh the entry on every write path.
+
 > The TTL unit depends on the `cache-manager` version: seconds in v4 and below, **milliseconds** in v5+. `300` above means 5 minutes in seconds; for v5+ use `300_000`.
 
 ### 4. Logging
@@ -1659,6 +1774,13 @@ export class CustomersService {
 }
 ```
 
+**How it works**
+
+- `new Logger(CustomersService.name)` creates a logger whose output is prefixed with the class name, so you can tell which service wrote each line.
+- `log` records normal events, here before and after the save. `error(message, stack)` records failures with the stack trace.
+- The `try/catch` logs and then **rethrows** the error, so the exception still reaches the filter. Swallowing it after logging would hide the failure from the client.
+- Do not log secrets or full request bodies; the example logs only the email and the new id.
+
 ### 5. Validation inside services
 
 ```ts
@@ -1687,6 +1809,8 @@ private isValidUUID(id: string): boolean {
   return uuidRegex.test(id);
 }
 ```
+
+The service checks the ID's format before querying, so a malformed ID returns a clear `400` instead of a database error. Then it loads the customer, checks that a changed email is not already in use, and saves. `isValidUUID` uses a regular expression for the standard UUID layout. Putting `ParseUUIDPipe` on the controller parameter achieves the same check earlier.
 
 > A `ParseUUIDPipe` on the controller parameter does the same check before the service is called.
 

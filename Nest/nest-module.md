@@ -72,6 +72,8 @@ export class AppModule {}
 export class AppModule {}
 ```
 
+`AppModule` pulls four modules into its scope. Everything those modules **export** can now be injected into `AppController` and `AppService`; anything they keep private cannot. The comments show the typical roles: persistence, configuration, and two feature modules. The order inside `imports` does not matter.
+
 **Common use cases:** database modules (`TypeOrmModule`, `MongooseModule`), configuration (`ConfigModule`), shared utility modules, feature modules whose services you need, third-party NestJS modules.
 
 ---
@@ -108,6 +110,12 @@ export class OrdersService {
   // constructor(private usersRepo: UsersRepository) {}  // fails: not exported
 }
 ```
+
+**How it works**
+
+- `UsersModule` registers two providers, but exports only `UsersService`. `UsersRepository` is an internal detail.
+- `OrdersModule` imports `UsersModule`, so it may inject `UsersService`. Injecting `UsersRepository` would fail with a dependency-resolution error, because it was not exported.
+- This is the module's public API: other modules can depend only on what you export, so you can change the rest freely.
 
 ### Re-exporting an imported module
 
@@ -201,6 +209,12 @@ export class UsersService {
 export class UsersModule {}
 ```
 
+**How it works**
+
+- `@Injectable()` marks the class as something Nest's container can create and inject.
+- Listing `UsersService` in `providers` is what registers it. Without that line it exists as a class but nobody can inject it.
+- The shorthand `providers: [UsersService]` is expanded by Nest into `{ provide: UsersService, useClass: UsersService }`: the class itself is both the **token** (what you ask for) and the **implementation** (what you get).
+
 ### Scopes
 
 | Scope | Instance lifetime |
@@ -213,6 +227,8 @@ export class UsersModule {}
 @Injectable({ scope: Scope.REQUEST })
 export class RequestScopedService {}
 ```
+
+Setting `scope` on `@Injectable()` changes the lifetime from the default singleton to **one new instance per incoming request**. The scope also propagates: any class that injects a request-scoped provider becomes request-scoped too, which costs performance, so use it only when the instance must hold per-request state.
 
 ---
 
@@ -234,6 +250,8 @@ providers: [
 ]
 ```
 
+Both entries mean the same thing. The explicit form separates the **token** (`provide`) from the **implementation** (`useClass`), which lets you swap implementations, for example `{ provide: UsersService, useClass: MockUsersService }` in tests, without changing any code that injects `UsersService`.
+
 ### Value provider
 
 ```ts
@@ -244,6 +262,8 @@ providers: [
   },
 ]
 ```
+
+`useValue` registers a ready-made value instead of a class. The token is the string `'CONFIG'`, because a plain object has no class to use as a token. Anything that wants this value must ask for it by that exact string with `@Inject('CONFIG')` (see [Injecting with `@Inject()`](#injecting-with-inject)).
 
 ### Factory provider
 
@@ -260,6 +280,12 @@ providers: [
 ]
 ```
 
+**How it works**
+
+1. Nest first resolves everything in `inject` (here `ConfigService`) and passes it to the factory as an argument.
+2. The factory reads the config and builds the connection. Because it is `async`, Nest **waits** for the promise before any provider that depends on `'DATABASE_CONNECTION'` is created.
+3. The resolved connection becomes the provider's value, shared like any singleton.
+
 ### Existing (alias) provider
 
 ```ts
@@ -271,6 +297,8 @@ providers: [
   },
 ]
 ```
+
+`useExisting` creates a **second token** that points at the same instance: `'USERS_SERVICE_ALIAS'` and `UsersService` resolve to one object, not two. It is useful for exposing one implementation under another name or interface token without creating a second instance.
 
 ---
 
@@ -293,6 +321,12 @@ export class SomeService {
   }
 }
 ```
+
+**How it works**
+
+- Interfaces are erased at runtime, so Nest cannot use `AppConfig` to know what to inject. The string `'CONFIG'` is what Nest looks up, via `@Inject('CONFIG')`.
+- The `: AppConfig` annotation only helps TypeScript: inside the class `this.config.apiKey` is typed and autocompleted.
+- The string in `@Inject` must match `provide` exactly, and a typo only fails at startup with a "can't resolve dependencies" error.
 
 ### Value provider with a typed config
 
@@ -321,6 +355,8 @@ export class DatabaseService {
 }
 ```
 
+The module registers a plain object under the token `'DATABASE_CONFIG'`, and `DatabaseService` receives it through `@Inject('DATABASE_CONFIG')`. The `DatabaseConfig` interface describes the object's shape for the compiler. Note that `ConfigModule` must **export** the token (or be imported) for another module's `DatabaseService` to resolve it.
+
 ### Factory provider injected by token
 
 ```ts
@@ -340,6 +376,15 @@ export class ProductService {
   constructor(@Inject('API_CLIENT') private apiClient: ApiClient) {}
 }
 ```
+
+**How the chain resolves**
+
+1. `ApiModule` defines `'API_CLIENT'` with a factory that needs a value registered as `'CONFIG'`.
+2. `inject: ['CONFIG']` tells Nest which providers to pass into the factory's parameters, in order.
+3. The factory builds an `ApiClient` from `config.apiUrl`.
+4. `ProductService` asks for `'API_CLIENT'` and receives that client, typed as `ApiClient`.
+
+`'CONFIG'` must be available in `ApiModule`'s scope (provided there or exported from an imported module).
 
 ### Symbol token (recommended for type safety)
 
@@ -373,6 +418,12 @@ export class UserRepository {
 }
 ```
 
+**How it works**
+
+- `Symbol(...)` creates a token that is **unique by construction**: no other file can accidentally reuse it, unlike a string such as `'DATABASE'`.
+- The token is exported from a shared file, so the module that provides it and every class that injects it import the same value. A typo becomes a compile error instead of a runtime failure.
+- The factory is `async`, so the repository receives an already-created connection.
+
 ### Class token with `@Inject` (explicit, optional)
 
 ```ts
@@ -384,6 +435,8 @@ export class AppService {
   ) {}
 }
 ```
+
+For a class provider the type annotation is already the token, so `@Inject(LoggerService)` is redundant and the comment in the code shows the usual short form. Use `@Inject()` explicitly only when the token is **not** the parameter's type: strings, symbols, or interfaces.
 
 ### Conditional implementation with a union type
 
@@ -409,6 +462,12 @@ export class CheckoutService {
   constructor(@Inject('PAYMENT_PROVIDER') private paymentProvider: PaymentProvider) {}
 }
 ```
+
+**How it works**
+
+- The factory reads `PAYMENT_PROVIDER` from configuration and returns **either** a `StripePayment` or a `PaypalPayment`. The consumer does not know or care which.
+- The union type `PaymentProvider` is the contract: both classes must offer the members `CheckoutService` uses.
+- Switching providers is a configuration change, not a code change. A shared interface or abstract class is cleaner than a union once there are more than two options.
 
 ---
 
@@ -436,6 +495,8 @@ export class CheckoutService {
 })
 export class AppModule {}
 ```
+
+The simplest factory: no dependencies, so no `inject` array. The function runs once while the module initializes and its return value is the provider. The URL is hardcoded only for the example; in real code read it from configuration.
 
 ### Async factory with dependencies
 
@@ -468,6 +529,12 @@ export class AppModule {}
 export class DatabaseModule {}
 ```
 
+**How it works**
+
+- `imports: [ConfigModule]` makes `ConfigService` available, and `inject: [ConfigService]` passes it to the factory.
+- The factory is `async`: it connects, runs migrations, and only then returns the connection. Nest waits for it, so the application does not finish starting (and no dependent provider is created) until the database is ready.
+- If anything in the factory throws, startup fails immediately, which is what you want for a missing database.
+
 ### Conditional on environment
 
 ```ts
@@ -487,6 +554,8 @@ providers: [
 ]
 ```
 
+The factory chooses an implementation from `NODE_ENV`: the real Stripe client in production, a mock everywhere else, so development and tests never charge a card. Consumers inject `'PAYMENT_SERVICE'` and behave identically in both cases.
+
 ### Multiple dependencies
 
 ```ts
@@ -502,6 +571,8 @@ providers: [
   },
 ]
 ```
+
+The factory has three dependencies, listed in `inject` in the **same order** as the parameters (`ConfigService`, `Logger`, `HttpService`). Nest matches them by position, not by name, so reordering one array without the other silently passes the wrong object.
 
 ### Returning different implementations
 
@@ -573,6 +644,12 @@ export class UsersService {
 }
 ```
 
+**How it works**
+
+- `@Global()` makes the module's exports visible everywhere without each module listing it in `imports`.
+- It does **not** export anything by itself: the providers still have to be listed in `exports`, hence the comment.
+- `AppModule` imports `CoreModule` once so Nest registers it. `UsersService` then injects `DatabaseService` and `Logger` with no import of `CoreModule` in its own module.
+
 ### Regular vs global module
 
 ```ts
@@ -598,6 +675,16 @@ export class AppModule {}
 export class UsersModule {}
 ```
 
+The two halves show the same `LoggerModule` in both styles.
+
+| | Regular module | Global module |
+|---|---|---|
+| Who imports it | Every module that uses `LoggerService` | Only `AppModule`, once |
+| Dependencies visible in each module's `imports` | Yes | No (hidden) |
+| Risk | Repetitive imports | Hidden dependencies and harder tests |
+
+Prefer the regular form by default and use `@Global()` for infrastructure that nearly everything needs.
+
 ### Global configuration module
 
 ```ts
@@ -614,6 +701,8 @@ export class UsersModule {}
 })
 export class GlobalConfigModule {}
 ```
+
+`ConfigModule.forRoot({ isGlobal: true })` already makes `ConfigService` global, so wrapping it in a `@Global()` module like this is redundant: the `isGlobal` flag is enough. The example shows both only to illustrate that two different mechanisms can produce a global provider. `envFilePath` points at the file to load.
 
 ### Global database module
 
@@ -638,6 +727,8 @@ export class GlobalConfigModule {}
 export class GlobalDatabaseModule {}
 ```
 
+`TypeOrmModule.forRootAsync` builds the database options at startup from `ConfigService` (`useFactory` + `inject`), instead of hardcoding them. `autoLoadEntities: true` registers every entity added with `forFeature()` automatically. Making the module global means feature modules only need `TypeOrmModule.forFeature([Entity])` to get repositories.
+
 ### CoreModule pattern
 
 ```ts
@@ -659,6 +750,14 @@ export class CoreModule {}
 })
 export class AppModule {}
 ```
+
+**What a CoreModule bundles**
+
+- `imports` brings in configuration and logging for the whole app.
+- `providers` and `exports` expose `DatabaseService`, `CacheService` and a constant `'APP_VERSION'` (a value provider, injected with `@Inject('APP_VERSION')`).
+- `AppModule` imports `CoreModule` **once**; every feature module can then use those providers with no import.
+
+Keep a CoreModule to infrastructure. Business features belong in their own modules.
 
 ### When to use it
 
@@ -704,6 +803,13 @@ export class DatabaseModule {
 export class AppModule {}
 ```
 
+**How it works**
+
+- A **dynamic module** is a module whose metadata is computed by a static method. `@Module({})` is empty on purpose.
+- `forRoot(options)` returns a `DynamicModule`: the class (`module`), plus the providers, exports and `global` flag built from the options you pass.
+- `AppModule` calls `DatabaseModule.forRoot({ host, port })`; the options are stored under `'DATABASE_OPTIONS'` and `DatabaseService` can inject them.
+- The same pattern is behind `ConfigModule.forRoot()` and `TypeOrmModule.forFeature()`.
+
 ---
 
 ## Module organization patterns
@@ -726,6 +832,8 @@ export class AppModule {}
 export class OrdersModule {}
 ```
 
+A feature module is self-contained: it registers its entity with `forFeature`, owns its controller and service, and **exports** only the service other modules may use. Other modules import `OrdersModule` and never touch its repository.
+
 ### Shared module
 
 ```ts
@@ -736,6 +844,8 @@ export class OrdersModule {}
 })
 export class SharedModule {}
 ```
+
+A shared module collects small, stateless utilities. Marking it `@Global()` avoids importing it in every module, which is acceptable for helpers used everywhere (logging, validation, formatting) but not for business services.
 
 ### Core module
 
@@ -752,6 +862,8 @@ export class SharedModule {}
 })
 export class CoreModule {}
 ```
+
+The core module is infrastructure loaded once. It imports configuration (global), the database and the cache, and exports the logger and cache wrappers. Because it is global, the rest of the app uses `AppLogger` and `AppCache` without importing this module.
 
 ---
 
@@ -808,6 +920,15 @@ import { EmailModule } from '../email/email.module';
 })
 export class UsersModule {}
 ```
+
+**How the four parts fit together**
+
+1. **`imports`**: the module needs the `User` repository (`forFeature`), email functionality and configuration.
+2. **`controllers`**: `UsersController` exposes the HTTP routes.
+3. **`providers`**: two classes, a factory that builds a `'USER_CONFIG'` object from `ConfigService`, and a fixed value `'DEFAULT_USER_ROLE'`.
+4. **`exports`**: the public API. Other modules can inject `UsersService`, `UsersRepository` and `'USER_CONFIG'`, and re-exporting `TypeOrmModule` hands them the repository providers too. `'DEFAULT_USER_ROLE'` is not exported, so it stays private.
+
+Export only what other modules truly need; each export becomes something you must keep stable.
 
 ---
 

@@ -48,6 +48,8 @@ Controller -> Service -> throws CustomException
    Formatted JSON response sent to client
 ```
 
+Read it top to bottom. The controller hands the work to a service; the service throws a custom exception when a rule is broken; Nest skips the rest of the handler and passes the exception to the filter, which builds the JSON response. Nobody between the throw and the filter needs a `try/catch`.
+
 ---
 
 ## Why custom exceptions
@@ -74,6 +76,8 @@ src/
 │       └── http-exception.filter.ts
 └── main.ts
 ```
+
+`common/exceptions/` holds one base class plus one file per domain (auth, customer, driver), so a service imports only the exceptions of the domains it deals with. `common/filters/` holds the filter that turns every exception into a response.
 
 ---
 
@@ -154,6 +158,13 @@ export class UnauthorizedAccessException extends CustomBaseException {
 }
 ```
 
+**How it works**
+
+- Each class extends `CustomBaseException` and calls `super(message, status)`, so the message, status code and response body shape live in one place.
+- The constructors take only what varies: `EmailAlreadyExistsException(email)` builds its message from the argument, while `InvalidCredentialsException()` takes nothing because its message is fixed.
+- `UnauthorizedAccessException(resource?)` has an optional argument: with it the message names the resource, without it the message is generic. The status is `403 Forbidden` because the caller is known but not allowed.
+- Choosing the status in the exception means a service just writes `throw new InvalidCredentialsException()` and never thinks about HTTP.
+
 ### Customer exceptions
 
 `src/common/exceptions/customer.exceptions.ts`
@@ -180,6 +191,8 @@ export class CustomerAlreadyExistsException extends CustomBaseException {
   }
 }
 ```
+
+Same pattern for the customer domain: `NotFound` (404) when the ID does not exist, `BadRequest` (400) when submitted data breaks a rule, and `Conflict` (409) when the email is already taken. 409 is the right status for "this would duplicate something that already exists".
 
 ### Driver exceptions
 
@@ -213,6 +226,8 @@ export class DriverAlreadyExistsException extends CustomBaseException {
   }
 }
 ```
+
+The driver exceptions follow the same pattern. `DriverNotAvailableException` uses `409 Conflict` because the request is valid but conflicts with the driver's current state, and `InvalidVehicleTypeException` uses `400` because the input itself is wrong.
 
 ### Exception catalog
 
@@ -303,6 +318,15 @@ export class GlobalExceptionFilter implements ExceptionFilter {
 }
 ```
 
+**How it works**
+
+1. `@Catch()` with no argument registers the filter for **every** exception, not only `HttpException`.
+2. The defaults assume the worst: status `500` and a generic message.
+3. If the exception **is** an `HttpException` (all custom exceptions are), its real status and response body replace the defaults. When the body is an object, it is kept as `errorResponse` and the message is read from `error.message` (our format) or `message` (Nest's built-in format).
+4. If it is some other `Error` (a bug, a failed query), the message is logged together with the stack trace, but the client still gets the generic 500 so internals do not leak.
+5. Every failure is logged with method, URL, status and message.
+6. The response is the exception's own body when there is one, otherwise a generated `{ success, error }` body that includes the request path.
+
 ### How it decides what to send
 
 | Exception type | Status | Response body |
@@ -323,6 +347,8 @@ catch(exception: HttpException, host: ArgumentsHost) {
 }
 ```
 
+Do not use this version: the parameter type promises an `HttpException`, but any thrown value can arrive. The corrected version follows.
+
 ```ts
 // Correct
 catch(exception: unknown, host: ArgumentsHost) {
@@ -338,6 +364,8 @@ catch(exception: unknown, host: ArgumentsHost) {
   }
 }
 ```
+
+The wrong version types the parameter as `HttpException`, but TypeScript types are not checked at runtime, so a plain `TypeError` still reaches `catch()` and `exception.getStatus()` does not exist. The correct version accepts `unknown`, checks `instanceof HttpException` before using HttpException methods, and falls back to a safe 500 for everything else.
 
 ---
 
@@ -481,6 +509,14 @@ export class AuthService {
 }
 ```
 
+**How it works**
+
+- Every rule is a plain `if` that throws a domain exception: duplicate email gives `CustomerAlreadyExistsException`, unknown email or wrong password gives `InvalidCredentialsException`.
+- Both login failures throw the **same** exception, so an attacker cannot tell whether the email exists.
+- `bcrypt.hash(password, 10)` creates the stored hash (the `10` is the cost factor: higher is slower and harder to brute-force). `bcrypt.compare` checks a login attempt against the hash.
+- `create` builds the entity from the DTO but swaps in the hashed password, then `save` inserts it.
+- The service never builds a response or catches errors: it either returns a value or throws.
+
 > The same `InvalidCredentialsException` is thrown for "user not found" and "wrong password", so the response never reveals which emails are registered.
 
 ### Customers service
@@ -537,6 +573,13 @@ export class CustomersService {
   }
 }
 ```
+
+**How it works**
+
+- Every failure is expressed as a thrown domain exception: not found, invalid data. The service never builds a response.
+- `update` reuses `findOne`, so the not-found check and exception come for free.
+- The email check only runs when the email actually changes, and a duplicate throws `InvalidCustomerDataException` (a 400 here; `CustomerAlreadyExistsException` would give a 409).
+- `Object.assign(customer, updateData)` merges the changes into the loaded entity, and `save` persists it.
 
 ### Delivery drivers service
 
@@ -611,6 +654,13 @@ export class DeliveryDriversService {
   }
 }
 ```
+
+**How it works**
+
+- `findOne` is the shared lookup that throws `DriverNotFoundException`, and other methods call it first.
+- `findAvailableDriver` builds a query for available drivers. If a vehicle type is given it is **validated against a whitelist first** (`InvalidVehicleTypeException`) and then added as a filter.
+- When the query returns nothing, `DriverNotAvailableException` signals that no driver is free.
+- `assignOrder` checks the rule (`is_available`) before changing state, then marks the driver unavailable. Each rule is a separate throw, so the filter can return the right status for each.
 
 ---
 
@@ -701,6 +751,8 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
 }
 ```
 
+The driver strategy is the customer strategy with three differences: it uses the `'jwt-driver'` name, the `driverSecret` and the drivers repository. Both throw `InvalidTokenException` when the payload has no `sub`, and a not-found exception when the user in the token no longer exists, so the filter can return a consistent `401` or `404`.
+
 ### Guards
 
 `src/auth/guards/jwt-customer.guard.ts`
@@ -783,6 +835,13 @@ export class AuthController {
 }
 ```
 
+**How it works**
+
+- Each method does one thing: pass the validated DTO to the service and return the result. There is no `try/catch`.
+- `@HttpCode(HttpStatus.OK)` on the login routes returns `200` instead of POST's default `201`, because logging in does not create a resource.
+- `ClassSerializerInterceptor` applies `@Exclude()` on response DTOs, which removes fields such as password hashes.
+- When the service throws (`CustomerAlreadyExistsException`, `InvalidCredentialsException`), the exception skips the rest of the method and reaches the global filter.
+
 ### Customers controller
 
 `src/customers/customers.controller.ts`
@@ -815,6 +874,8 @@ export class CustomersController {
   }
 }
 ```
+
+`@UseGuards(JwtCustomerGuard)` on the class protects all three routes. Each handler is a single service call; the comments list the exceptions the service may throw. Errors become responses without any code in the controller: `findOne` on a missing ID produces the `404` shown in [Example error responses](#example-error-responses).
 
 ### Delivery drivers controller
 
@@ -852,6 +913,8 @@ export class DeliveryDriversController {
   }
 }
 ```
+
+Only `PATCH :id/availability` has a guard, so `GET available` is public while updating availability needs a driver token. Guards are chosen per route here. Each handler is one service call and every error path is handled by the filter.
 
 ---
 
