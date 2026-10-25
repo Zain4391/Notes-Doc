@@ -1,52 +1,58 @@
-## Framework Notes
+# Dev Notes
 
-This repository collects concise, practical notes and examples for web frameworks. Use these notes as quick references, learning aids, and implementation examples.
+Personal developer notes: practical, quick-lookup references for the frameworks, tools and shells I use. Each folder covers one technology; each file inside covers one topic, with short explanations, working examples and the pitfalls worth remembering.
 
-Table of Contents
-- Overview
-- Repository structure
-- How to use the notes
-- Adding new framework notes
-- Naming conventions
-- Contributing
-- License & contact
+The vault is plain Markdown, so it reads the same on GitHub and in [Obsidian](https://obsidian.md) (open this folder as a vault).
 
-Overview
---------
-Each framework gets its own folder containing a framework-level README and topic files (guides, examples, references). Files contain short explanations, code snippets, and step-by-step examples.
+---
 
--Repository structure
----------------------
-All notes are single Markdown files (no subfolders). Name files after the concept or method they describe so they're easy to find and scan.
+## Contents
 
-Examples:
+### Frameworks & libraries
 
-- dependency-injection.md       # Concept + short examples
-- controllers.md                # Controllers and routing patterns
-- testing.md                    # Testing tips and minimal examples
-- nest-js-overview.md           # Framework-specific overview (if desired)
+| Folder | Covers | Start with |
+|---|---|---|
+| [Angular](Angular/) | Setup, core concepts, routing, forms, services and HTTP | [basic-setup.md](Angular/basic-setup.md) |
+| [Dotnet](Dotnet/) | ASP.NET Core configuration, options pattern, EF Core (setup and Fluent API cheat sheet), Docker | [README.md](Dotnet/README.md) |
+| [nest-js](nest-js/) | Modules, controllers, services, custom exceptions, JWT authentication, TypeORM, RabbitMQ | [nest-core.md](nest-js/nest-core.md) |
+| [Next](Next/) | Overview and routing, data fetching, Axios client, React Query hooks, custom hooks, NextAuth, Zod + React Hook Form, TypeScript patterns | [next-overview.md](Next/next-overview.md) |
+| [React](React/) | Project setup with Vite and Tailwind CSS | [React Setup - Vite with TailwindCSS.md](React/React%20Setup%20-%20Vite%20with%20TailwindCSS.md) |
+| [Zustand](Zustand/) | Client state management | [overview.md](Zustand/overview.md) |
 
-How to use the notes
---------------------
-- Read the framework README for a high-level orientation.
-- Open a guide for step-by-step instructions.
-- Use code under `examples/` for runnable snippets and quick experimentation.
+### Tools & shells
 
-Adding new framework notes
---------------------------
-1. Create a new folder named after the framework (kebab-case). Example: `express-js/` or `next-js/`.
-2. Add a `<concept-name>.md` file with description, examples & links etc.
+| Folder | Covers | Start with |
+|---|---|---|
+| [Docker](Docker/) | Fundamentals, Dockerfile, images, containers, Compose, networking, volumes, security, troubleshooting, cheatsheet, glossary | [README.md](Docker/README.md) |
+| [Powershell](Powershell/) | Command reference with every common flag explained | [README.md](Powershell/README.md) |
+| [linux-manjaro-commands](linux-manjaro-commands/) | Manjaro / Arch package management | [update-packages.md](linux-manjaro-commands/update-packages.md) |
 
-Naming conventions
-------------------
-- Folder names: `kebab-case` (e.g., `nest-js`).
-- File names: `short-descriptive-title.md` (e.g., `dependency-injection.md`).
-- Use `README.md` at the root of each framework folder for quick navigation.
+## How the notes are organised
 
-Contributing
-------------
-Contributions are welcome. When adding or editing notes:
-- Keep entries concise and focused.
-- Include example code and minimal reproduction steps when applicable.
-- Link to relevant external docs or sources.
+- One folder per technology; one Markdown file per topic.
+- Folders with several files have (or should get) a `README.md` that acts as an index, with a reading order and a "I need to..." lookup table. [Docker](Docker/README.md), [Dotnet](Dotnet/README.md) and [Powershell](Powershell/README.md) are the model to follow.
+- Notes are written as documentation, not throwaway code blocks: explain *what* and *why*, then show the command or code.
+- Cross-link related notes with relative links, e.g. `[Dockerizing an ASP.NET Core App](../Dotnet/dotnet-docker.md)`.
 
+## Adding a new note
+
+1. **New technology:** create a folder named after it, then add a `README.md` index once it has more than two or three files.
+2. **New topic:** add `topic-name.md` inside the matching folder. Name files after the concept, in lowercase `kebab-case`.
+3. Open with a one or two sentence summary of what the note covers and when to use it.
+4. Use fenced code blocks with a language tag, and put the explanation next to the code. For commands, document each flag in a table.
+5. Link the new file from the folder's `README.md` and, if it is a new folder, from the table above.
+
+## Conventions
+
+| Item | Convention |
+|---|---|
+| New folders | Technology name, e.g. `Powershell/`. Existing folders mix capitalised names and `kebab-case` (`nest-js`, `linux-manjaro-commands`); keep an existing name rather than rename it, since renames break links. |
+| New files | Lowercase `kebab-case`, e.g. `docker-networking.md`. A few older files use spaces and capitals; those are linked with `%20` in URLs. |
+| Folder index | `README.md` |
+| Code blocks | Always include the language (`bash`, `powershell`, `ts`, `csharp`, `yaml`, …) |
+| Headings | One `#` title per file, then `##` sections. Don't skip levels. |
+| `.obsidian/` | Git-ignored; editor settings stay local. |
+
+## Status
+
+Some folders are still single-topic or lack an index, and are candidates for the same treatment the Docker, Dotnet and Powershell notes received: [Angular](Angular/), [nest-js](nest-js/), [Next](Next/), [React](React/), [Zustand](Zustand/) and [linux-manjaro-commands](linux-manjaro-commands/).
