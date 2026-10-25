@@ -1,20 +1,82 @@
-# Complete JWT Authentication Setup for NestJS
+# JWT Authentication and Role-Based Access Control
 
-## Step 1: Install packages
+JWT authentication with Passport (separate customer and driver flows, bcrypt password hashing, typed payloads and responses), followed by role-based access control (RBAC) with a roles decorator and guard.
+
+**Contents**
+
+1. [How it works](#how-it-works)
+2. [Packages](#packages)
+3. [Project structure](#project-structure)
+4. [Core authentication files](#core-authentication-files)
+5. [JWT strategies and guards](#jwt-strategies-and-guards)
+6. [Types and response DTOs](#types-and-response-dtos)
+7. [Auth service](#auth-service)
+8. [Auth controller](#auth-controller)
+9. [Modules](#modules)
+10. [RBAC overview](#rbac-overview)
+11. [Roles enum](#roles-enum)
+12. [Role column on the entities](#role-column-on-the-entities)
+13. [Roles decorator](#roles-decorator)
+14. [Roles guard](#roles-guard)
+15. [Role in the JWT strategies](#role-in-the-jwt-strategies)
+16. [Role in the types](#role-in-the-types)
+17. [Role in the auth service](#role-in-the-auth-service)
+18. [Using RBAC in controllers](#using-rbac-in-controllers)
+19. [Global vs route-level guards](#global-vs-route-level-guards)
+20. [Permission-based access control](#permission-based-access-control)
+21. [Best practices](#best-practices)
+22. [Common mistakes](#common-mistakes)
+23. [Summary](#summary)
+
+Related: [Custom Exceptions](custom-exception.md) (replace the built-in exceptions used here) · [Services](service.md) · [TypeORM + Supabase](typeorm-config.md) (entities and database)
+
+---
+
+## How it works
+
+```text
+Register  ->  password hashed with bcrypt  ->  saved
+Login     ->  password compared  ->  JWT signed with a per-user-type secret  ->  returned
+Request   ->  Authorization: Bearer <token>  ->  Passport strategy verifies  ->  validate() returns user  ->  req.user
+```
+
+| Piece | Responsibility |
+|-------|----------------|
+| **Strategy** (`PassportStrategy`) | Extracts and verifies the token, loads the user, returns what becomes `req.user`. |
+| **Guard** (`AuthGuard('<name>')`) | Triggers the named strategy on a route. |
+| **`JwtService`** | Signs tokens at login. |
+| **DTOs** | Validate input and shape output. |
+
+This project has **two user types**, each with its own secret, strategy and guard: `customer` and `driver`.
+
+---
+
+## Packages
 
 ```bash
 npm install --save @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
 npm install --save-dev @types/passport-jwt @types/bcrypt
 ```
 
-## Step 2: Project Structure
-```
+| Package | Purpose |
+|---------|---------|
+| `@nestjs/jwt` | Sign and verify JWTs (`JwtService`). |
+| `@nestjs/passport` | Passport integration (`PassportStrategy`, `AuthGuard`). |
+| `passport`, `passport-jwt` | Authentication middleware and the JWT strategy. |
+| `bcrypt` | Password hashing. |
+
+---
+
+## Project structure
+
+```text
 src/
 ├── auth/
 │   ├── constants.ts
 │   ├── dto/
 │   │   ├── login.dto.ts
-│   │   └── register.dto.ts
+│   │   ├── register.dto.ts
+│   │   └── auth-response.dto.ts
 │   ├── guards/
 │   │   ├── jwt-customer.guard.ts
 │   │   └── jwt-driver.guard.ts
@@ -23,6 +85,8 @@ src/
 │   │   └── jwt-driver.strategy.ts
 │   ├── decorators/
 │   │   └── current-user.decorator.ts
+│   ├── types/
+│   │   └── auth.types.ts
 │   ├── auth.module.ts
 │   ├── auth.service.ts
 │   └── auth.controller.ts
@@ -34,27 +98,34 @@ src/
     ├── delivery-drivers.module.ts
     ├── delivery-drivers.service.ts
     └── delivery-drivers.controller.ts
-
 ```
 
-## Step 3: Core Authentication Files
+---
+
+## Core authentication files
 
 ### Constants
 
-**src/auth/constants.ts**
+`src/auth/constants.ts`
 
 ```ts
 export const jwtConstants = {
   customerSecret: process.env.JWT_CUSTOMER_SECRET || 'customer-secret-change-in-production',
   driverSecret: process.env.JWT_DRIVER_SECRET || 'driver-secret-change-in-production',
-  expiresIn: '7d', // Token valid for 7 days
+  expiresIn: '7d', // token valid for 7 days
 };
-
 ```
+
+| Key | Description |
+|-----|-------------|
+| `customerSecret` / `driverSecret` | Separate signing secrets, so a customer token can never validate as a driver token. Set real values through env variables. |
+| `expiresIn` | Token lifetime. |
+
+> The fallback strings are for local development only. Never ship them to production.
 
 ### DTOs
 
-**src/auth/dto/login-dto.ts**
+`src/auth/dto/login.dto.ts`
 
 ```ts
 import { IsEmail, IsNotEmpty, IsString } from 'class-validator';
@@ -70,10 +141,9 @@ export class LoginDto {
 }
 ```
 
-**src/auth/dto/register.dto**
+`src/auth/dto/register.dto.ts`
 
 ```ts
-
 import { IsEmail, IsNotEmpty, IsString, MinLength, IsEnum, IsOptional } from 'class-validator';
 import { VEHICLE_TYPE } from '../../delivery-drivers/entities/delivery-driver.entity';
 
@@ -123,16 +193,15 @@ export class RegisterDriverDto {
   @IsOptional()
   profile_image_url?: string;
 }
-
 ```
 
-### Decorators
+### Current user decorator
 
-**src/auth/decorators/current-user.decorator.ts**
+`src/auth/decorators/current-user.decorator.ts`
 
-Extract Current user from the request
+Extracts the authenticated user (set by the strategy) from the request.
 
-``` ts
+```ts
 import { createParamDecorator, ExecutionContext } from '@nestjs/common';
 
 export const CurrentUser = createParamDecorator(
@@ -141,16 +210,19 @@ export const CurrentUser = createParamDecorator(
     return request.user;
   },
 );
-
 ```
 
-## Step 4: JWT Strategies & Guards
+Usage: `getProfile(@CurrentUser() user: AuthenticatedUser)`
 
-Validates the user.
+---
 
-### Customer Strategy
+## JWT strategies and guards
 
-**src/auth/strategies/jwt-customer.strategy.ts**
+A strategy validates the token and the user. Each user type has its own named strategy.
+
+### Customer strategy
+
+`src/auth/strategies/jwt-customer.strategy.ts`
 
 ```ts
 import { Injectable, UnauthorizedException } from '@nestjs/common';
@@ -191,15 +263,13 @@ export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-custome
     };
   }
 }
-
 ```
 
-### Driver Strategy
+### Driver strategy
 
-**src/auth/strategies/jwt-driver.strategy.ts**
+`src/auth/strategies/jwt-driver.strategy.ts`
 
 ```ts
-
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { PassportStrategy } from '@nestjs/passport';
 import { ExtractJwt, Strategy } from 'passport-jwt';
@@ -238,10 +308,21 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
     };
   }
 }
-
 ```
 
-**src/auth/guards/customer.guard.ts**
+### Strategy options
+
+| Option | Description |
+|--------|-------------|
+| `PassportStrategy(Strategy, 'jwt-customer')` | Registers the strategy under this name; guards refer to it. |
+| `jwtFromRequest` | Where to read the token. `fromAuthHeaderAsBearerToken()` reads `Authorization: Bearer <token>`. |
+| `ignoreExpiration: false` | Reject expired tokens. |
+| `secretOrKey` | Secret used to verify the signature (must match the one used to sign). |
+| `validate(payload)` | Called with the decoded payload after verification. The returned object becomes `req.user`. Throwing rejects the request. |
+
+### Guards
+
+`src/auth/guards/jwt-customer.guard.ts`
 
 ```ts
 import { Injectable } from '@nestjs/common';
@@ -249,33 +330,32 @@ import { AuthGuard } from '@nestjs/passport';
 
 @Injectable()
 export class JwtCustomerGuard extends AuthGuard('jwt-customer') {}
-
 ```
-**src/auth/guards/driver.guard.ts**
+
+`src/auth/guards/jwt-driver.guard.ts`
 
 ```ts
-
 import { Injectable } from '@nestjs/common';
 import { AuthGuard } from '@nestjs/passport';
 
 @Injectable()
 export class JwtDriverGuard extends AuthGuard('jwt-driver') {}
-
 ```
 
-### Key points
+### Improvements
 
-1. any type should be changed to a proper payload type.
-2. return format can be specified.
+1. Replace `payload: any` with a proper payload type.
+2. Define the shape of the returned user explicitly.
 
-### Key Improvements
+---
 
-Add types:
+## Types and response DTOs
 
-**src/auth/types/auth.types.ts**
+### Auth types
+
+`src/auth/types/auth.types.ts`
 
 ```ts
-
 export interface JwtPayload {
   sub: string;
   email: string;
@@ -289,15 +369,15 @@ export interface AuthenticatedUser {
   name: string;
   userType: 'customer' | 'driver';
 }
-
 ```
 
-**src/auth/dto/auth-response.dto.ts**
+### Response DTOs
 
-*NOTE*: The UserResponseDTO and AuthResponseDTO can be in separate files.
+`src/auth/dto/auth-response.dto.ts`
+
+`UserResponseDto` and `AuthResponseDto` could also live in separate files.
 
 ```ts
-
 import { Exclude, Expose } from 'class-transformer';
 
 export class UserResponseDto {
@@ -364,10 +444,18 @@ export class DriverResponseDto extends UserResponseDto {
     Object.assign(this, partial);
   }
 }
-
 ```
 
-**src/common/dto/api-response.dto.ts**
+| Decorator | Effect (with `ClassSerializerInterceptor`) |
+|-----------|--------------------------------------------|
+| `@Expose()` | Property is included in the response. |
+| `@Exclude()` | Property is removed from the response (e.g. `password`). |
+
+### Generic API response wrappers
+
+`src/common/dto/api-response.dto.ts`
+
+These can be used app-wide.
 
 ```ts
 import { Expose } from 'class-transformer';
@@ -409,17 +497,17 @@ export class ApiErrorResponse {
     };
   }
 }
-
 ```
 
-Now these tyoes can be used app wide.
+---
 
-## Step 5: Auth Service
+## Auth service
 
-Handles registration and login
+`src/auth/auth.service.ts`
+
+Handles registration and login for both user types.
 
 ```ts
-
 import { Injectable, UnauthorizedException, ConflictException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -431,7 +519,7 @@ import { LoginDto } from './dto/login.dto';
 import { RegisterCustomerDto, RegisterDriverDto } from './dto/register.dto';
 import { AuthResponseDto, CustomerResponseDto, DriverResponseDto } from './dto/auth-response.dto';
 import { jwtConstants } from './constants';
-import { JwtPayload } from '../common/types/auth.types';
+import { JwtPayload } from './types/auth.types';
 
 @Injectable()
 export class AuthService {
@@ -443,7 +531,7 @@ export class AuthService {
     private jwtService: JwtService,
   ) {}
 
-  // Customer Registration
+  // Customer registration
   async registerCustomer(registerDto: RegisterCustomerDto): Promise<CustomerResponseDto> {
     const existingCustomer = await this.customerRepository.findOne({
       where: { email: registerDto.email },
@@ -466,7 +554,7 @@ export class AuthService {
     return new CustomerResponseDto(savedCustomer);
   }
 
-  // Customer Login
+  // Customer login
   async loginCustomer(loginDto: LoginDto): Promise<AuthResponseDto> {
     const customer = await this.customerRepository.findOne({
       where: { email: loginDto.email },
@@ -504,7 +592,7 @@ export class AuthService {
     });
   }
 
-  // Driver Registration
+  // Driver registration
   async registerDriver(registerDto: RegisterDriverDto): Promise<DriverResponseDto> {
     const existingDriver = await this.driverRepository.findOne({
       where: { email: registerDto.email },
@@ -527,7 +615,7 @@ export class AuthService {
     return new DriverResponseDto(savedDriver);
   }
 
-  // Driver Login
+  // Driver login
   async loginDriver(loginDto: LoginDto): Promise<AuthResponseDto> {
     const driver = await this.driverRepository.findOne({
       where: { email: loginDto.email },
@@ -565,20 +653,27 @@ export class AuthService {
     });
   }
 }
-
 ```
 
-- ## Step 5: Controller
+| Call | Description |
+|------|-------------|
+| `bcrypt.hash(password, saltRounds)` | Hashes the password; `10` is a common cost factor. |
+| `bcrypt.compare(plain, hash)` | Checks a plain password against a stored hash. |
+| `jwtService.signAsync(payload, { secret, expiresIn })` | Signs the token. The secret must match the strategy's `secretOrKey`. |
+| `payload.sub` | Subject: the user's ID, read back in `validate()`. |
+
+> Both "user not found" and "wrong password" return the same `Invalid credentials` message, so the response never reveals which emails exist. To use custom exceptions instead of Nest's built-ins, see `custom-exception.md`.
+
+---
+
+## Auth controller
+
+`src/auth/auth.controller.ts`
 
 ```ts
-import { 
-  Controller, 
-  Post, 
-  Body, 
-  HttpCode, 
-  HttpStatus,
-  UseInterceptors,
-  ClassSerializerInterceptor,
+import {
+  Controller, Post, Body, HttpCode, HttpStatus,
+  UseInterceptors, ClassSerializerInterceptor,
 } from '@nestjs/common';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto/login.dto';
@@ -612,78 +707,58 @@ export class AuthController {
     return this.authService.loginDriver(loginDto);
   }
 }
-
 ```
 
-### Why No @UseGuards on Auth Controller?
+| Endpoint | Status | Purpose |
+|----------|--------|---------|
+| `POST /auth/customer/register` | 201 | Register a customer. |
+| `POST /auth/customer/login` | 200 | Log in a customer, returns token. |
+| `POST /auth/driver/register` | 201 | Register a driver. |
+| `POST /auth/driver/login` | 200 | Log in a driver, returns token. |
 
-**Important Distinction:**
+Login uses `@HttpCode(HttpStatus.OK)` because it does not create a resource (POST would otherwise return 201).
 
-- **`@UseInterceptors(ClassSerializerInterceptor)`** - Used for serializing response data (e.g., excluding password fields from responses)
-- **`@UseGuards(JwtCustomerGuard)`** - Used for protecting routes that require authentication
+### Why no `@UseGuards` on the auth controller
 
-**Authentication vs Authorization:**
+| Tool | Purpose |
+|------|---------|
+| `@UseInterceptors(ClassSerializerInterceptor)` | Serializes responses, e.g. drops fields marked `@Exclude()` such as passwords. |
+| `@UseGuards(JwtCustomerGuard)` | Protects routes that require an authenticated user. |
 
-The auth controller endpoints (register/login) are **public endpoints** - they don't require authentication because:
-- `/auth/customer/register` - Anyone can register (you can't be logged in to create an account)
-- `/auth/customer/login` - Anyone can login (you can't be logged in to login)
-- `/auth/driver/register` - Anyone can register as a driver
-- `/auth/driver/login` - Anyone can login as a driver
-
-**Where to Use Guards:**
-
-Guards are used on **protected endpoints** that require the user to be authenticated:
+Register and login are **public endpoints**: you cannot already be logged in to create an account or to log in. Guards belong on **protected** endpoints:
 
 ```ts
-import { Controller, Get, Patch, UseGuards } from '@nestjs/common';
+import { Controller, Get, Patch, Body, UseGuards } from '@nestjs/common';
 import { JwtCustomerGuard } from '../auth/guards/jwt-customer.guard';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 
 @Controller('customers')
-@UseGuards(JwtCustomerGuard) // All routes in this controller require authentication
+@UseGuards(JwtCustomerGuard) // every route in this controller requires authentication
 export class CustomersController {
-  
   @Get('profile')
   async getProfile(@CurrentUser() user) {
-    // Only authenticated customers can access this
-    return user;
+    return user; // only authenticated customers get here
   }
 
   @Patch('profile')
   async updateProfile(@CurrentUser() user, @Body() updateDto) {
-    // Only authenticated customers can update their profile
     return this.customersService.update(user.id, updateDto);
   }
 }
 ```
 
-**ClassSerializerInterceptor Purpose:**
+| Controller | `@UseInterceptors` | `@UseGuards` |
+|------------|--------------------|--------------|
+| Auth (register/login) | Yes | No (public) |
+| Protected controllers | Optional | Yes |
 
-It transforms the response and excludes fields marked with `@Exclude()` decorator (like passwords):
+---
 
-```ts
-export class CustomerResponseDto {
-  @Expose()
-  id: string;
+## Modules
 
-  @Expose()
-  email: string;
+### Customers module
 
-  @Exclude() // This field won't be sent in the response
-  password: string;
-}
-```
-
-**Summary:**
-- Auth controller: `@UseInterceptors` ✓, `@UseGuards` ✗ (public endpoints)
-- Protected controllers: `@UseGuards` ✓ (requires authentication)
-- Both can be used together when needed
-
-## Step 6: Update the Modules
-
-### Customers Module
-
-**src/customers/customers.module.ts**
+`src/customers/customers.module.ts`
 
 ```ts
 import { Module } from '@nestjs/common';
@@ -699,15 +774,13 @@ import { Customer } from './entities/customer.entity';
   exports: [CustomersService, TypeOrmModule],
 })
 export class CustomersModule {}
-
 ```
 
-### Drivers Module
+### Delivery drivers module
 
-**src/driver/drivers.module.ts**
+`src/delivery-drivers/delivery-drivers.module.ts`
 
 ```ts
-
 import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { DeliveryDriversService } from './delivery-drivers.service';
@@ -721,29 +794,71 @@ import { DeliveryDriver } from './entities/delivery-driver.entity';
   exports: [DeliveryDriversService, TypeOrmModule],
 })
 export class DeliveryDriversModule {}
+```
 
+> Exporting `TypeOrmModule` lets other modules (such as `AuthModule`) inject the `Customer` / `DeliveryDriver` repositories.
+
+### Auth module
+
+`src/auth/auth.module.ts`
+
+Registers the strategies, the service and the controller. This file is not part of the original notes: it is a minimal wiring that the structure above expects.
+
+```ts
+import { Module } from '@nestjs/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { AuthService } from './auth.service';
+import { AuthController } from './auth.controller';
+import { JwtCustomerStrategy } from './strategies/jwt-customer.strategy';
+import { JwtDriverStrategy } from './strategies/jwt-driver.strategy';
+import { Customer } from '../customers/entities/customer.entity';
+import { DeliveryDriver } from '../delivery-drivers/entities/delivery-driver.entity';
+
+@Module({
+  imports: [
+    TypeOrmModule.forFeature([Customer, DeliveryDriver]),
+    PassportModule,
+    JwtModule.register({}), // secret and expiry are passed per call in signAsync()
+  ],
+  controllers: [AuthController],
+  providers: [AuthService, JwtCustomerStrategy, JwtDriverStrategy],
+})
+export class AuthModule {}
+```
+
+> `JwtModule.register({})` is empty on purpose: each `signAsync()` call passes its own `secret`, which is how two user types use two secrets.
+
+---
+
+## RBAC overview
+
+RBAC restricts access based on the role assigned to a user. It controls which users can reach specific endpoints or perform certain actions.
+
+| Component | Purpose |
+|-----------|---------|
+| **Roles** | The user types (`admin`, `customer`, `driver`, `manager`). |
+| **`@Roles()` decorator** | Marks an endpoint with the roles allowed to use it. |
+| **`RolesGuard`** | Verifies `req.user` has one of the required roles. |
+| **Role assignment** | Role stored in the database and exposed to the guard through the JWT strategy. |
+
+**Request flow**
+
+```text
+Request + JWT
+  -> JwtCustomerGuard   (verifies token, fills req.user, including role)
+  -> RolesGuard         (reads @Roles() metadata, compares with req.user.role)
+  -> Handler            (or 403 Forbidden)
 ```
 
 ---
 
-# Role-Based Access Control (RBAC)
+## Roles enum
 
-Role-based Access Control (RBAC) is a security mechanism that restricts system access based on user roles. In NestJS, RBAC allows you to control which users can access specific endpoints or perform certain actions based on their assigned roles.
+One central enum for all roles.
 
-## Overview
-
-RBAC consists of several key components:
-
-1. **Roles** - Define different user types (e.g., 'admin', 'customer', 'driver', 'manager')
-2. **Role Decorator** - Mark endpoints with required roles
-3. **Roles Guard** - Verify user has the required role(s)
-4. **Role Assignment** - Store and retrieve user roles from database/JWT
-
-## Step 1: Define Roles Enum
-
-Create a centralized enum for all roles in your application.
-
-**src/auth/enums/role.enum.ts**
+`src/auth/enums/role.enum.ts`
 
 ```ts
 export enum Role {
@@ -754,17 +869,20 @@ export enum Role {
 }
 ```
 
-**Why use an enum?**
-- Type safety: Prevents typos when assigning or checking roles
-- Centralized management: Single source of truth for all roles
-- Autocomplete: IDEs can suggest available roles
-- Easy refactoring: Change role names in one place
+| Benefit | Description |
+|---------|-------------|
+| Type safety | Prevents typos when assigning or checking roles. |
+| Single source of truth | All roles in one place. |
+| Autocomplete | IDEs suggest the available roles. |
+| Easy refactoring | Rename a role in one place. |
 
-## Step 2: Update Database Entities
+---
 
-Add role field to your user entities to store user roles.
+## Role column on the entities
 
-**src/customers/entities/customer.entity.ts**
+Add a `role` column to the user entities.
+
+`src/customers/entities/customer.entity.ts`
 
 ```ts
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
@@ -802,7 +920,7 @@ export class Customer {
 }
 ```
 
-**src/delivery-drivers/entities/delivery-driver.entity.ts**
+`src/delivery-drivers/entities/delivery-driver.entity.ts`
 
 ```ts
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
@@ -831,10 +949,7 @@ export class DeliveryDriver {
   @Column()
   phone: string;
 
-  @Column({
-    type: 'enum',
-    enum: VEHICLE_TYPE,
-  })
+  @Column({ type: 'enum', enum: VEHICLE_TYPE })
   vehicle_type: VEHICLE_TYPE;
 
   @Column({ nullable: true })
@@ -855,17 +970,18 @@ export class DeliveryDriver {
 }
 ```
 
-**Key Points:**
-- `type: 'enum'` - Stores role as enum in database
-- `enum: Role` - References the Role enum
-- `default: Role.CUSTOMER` - Auto-assigns default role on creation
-- Database ensures only valid roles can be stored
+| Option | Description |
+|--------|-------------|
+| `type: 'enum'` | Stores the role as a database enum. |
+| `enum: Role` | References the TypeScript enum. |
+| `default: Role.CUSTOMER` | Assigned automatically on creation. |
+| Result | The database only accepts valid roles. |
 
-## Step 3: Create Roles Decorator
+---
 
-Create a custom decorator to specify which roles can access an endpoint.
+## Roles decorator
 
-**src/auth/decorators/roles.decorator.ts**
+`src/auth/decorators/roles.decorator.ts`
 
 ```ts
 import { SetMetadata } from '@nestjs/common';
@@ -875,28 +991,27 @@ export const ROLES_KEY = 'roles';
 export const Roles = (...roles: Role[]) => SetMetadata(ROLES_KEY, roles);
 ```
 
-**How it works:**
-- `SetMetadata()` - Attaches metadata to route handlers
-- `ROLES_KEY` - Unique key to store/retrieve role metadata
-- `...roles: Role[]` - Accepts multiple roles (e.g., `@Roles(Role.ADMIN, Role.MANAGER)`)
-- Returns a decorator that can be applied to controller methods or classes
+| Part | Description |
+|------|-------------|
+| `SetMetadata()` | Attaches metadata to a route handler or class. |
+| `ROLES_KEY` | Key used to store and retrieve the metadata. |
+| `...roles: Role[]` | Accepts several roles. |
 
-**Usage Example:**
 ```ts
-@Roles(Role.ADMIN)  // Only admins can access
+@Roles(Role.ADMIN)               // only admins
 @Get('admin/dashboard')
-getDashboard() { }
+getDashboard() {}
 
-@Roles(Role.ADMIN, Role.MANAGER)  // Admins OR managers can access
+@Roles(Role.ADMIN, Role.MANAGER) // admins OR managers
 @Get('reports')
-getReports() { }
+getReports() {}
 ```
 
-## Step 4: Create Roles Guard
+---
 
-Create a guard that checks if the user has the required role(s).
+## Roles guard
 
-**src/auth/guards/roles.guard.ts**
+`src/auth/guards/roles.guard.ts`
 
 ```ts
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
@@ -911,30 +1026,29 @@ export class RolesGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     // Get required roles from decorator metadata
     const requiredRoles = this.reflector.getAllAndOverride<Role[]>(ROLES_KEY, [
-      context.getHandler(), // Method-level decorator
-      context.getClass(),   // Class-level decorator
+      context.getHandler(), // method-level decorator
+      context.getClass(),   // class-level decorator
     ]);
 
-    // If no roles are required, allow access
+    // No roles required: allow access
     if (!requiredRoles) {
       return true;
     }
 
-    // Get user from request (set by JWT strategy)
+    // Get user from request (set by the JWT strategy)
     const request = context.switchToHttp().getRequest();
     const user = request.user;
 
-    // Check if user exists
     if (!user) {
       throw new ForbiddenException('User not authenticated');
     }
 
-    // Check if user has at least one of the required roles
+    // User needs at least one of the required roles
     const hasRole = requiredRoles.some((role) => user.role === role);
 
     if (!hasRole) {
       throw new ForbiddenException(
-        `Access denied. Required roles: ${requiredRoles.join(', ')}. Your role: ${user.role}`
+        `Access denied. Required roles: ${requiredRoles.join(', ')}. Your role: ${user.role}`,
       );
     }
 
@@ -943,30 +1057,18 @@ export class RolesGuard implements CanActivate {
 }
 ```
 
-**How the guard works:**
+### How the guard decides
 
-1. **Retrieve Required Roles:**
-   - `reflector.getAllAndOverride()` gets roles from `@Roles()` decorator
-   - Checks both method-level and class-level decorators
-   - Method-level decorators override class-level ones
+| Step | Behavior |
+|------|----------|
+| 1. Read required roles | `reflector.getAllAndOverride()` reads `@Roles()` from the method and the class; the method-level value wins. |
+| 2. No roles required | Returns `true`, so unannotated routes stay open. |
+| 3. Read the user | `request.user` comes from the strategy's `validate()` and must contain `role`. |
+| 4. Compare | `some()` gives **OR** logic: any matching role passes. |
+| 5. Result | Match returns `true`; otherwise `ForbiddenException` with a descriptive message. |
 
-2. **No Roles Required:**
-   - If `@Roles()` decorator isn't present, allow access
-   - Makes the guard non-breaking for unprotected routes
+Example 403 response:
 
-3. **Get Current User:**
-   - `request.user` is populated by JWT strategy's `validate()` method
-   - Contains user info including their role
-
-4. **Role Verification:**
-   - `some()` checks if user has ANY of the required roles (OR logic)
-   - Returns `true` if match found, `false` otherwise
-
-5. **Access Control:**
-   - If user has required role: Allow access (return `true`)
-   - If user lacks required role: Throw `ForbiddenException` with descriptive message
-
-**Example Error Response:**
 ```json
 {
   "statusCode": 403,
@@ -975,11 +1077,13 @@ export class RolesGuard implements CanActivate {
 }
 ```
 
-## Step 5: Update JWT Strategies
+---
 
-Modify JWT strategies to include the user's role in the JWT payload and request object.
+## Role in the JWT strategies
 
-**src/auth/strategies/jwt-customer.strategy.ts**
+Return the role from `validate()` so it lands on `request.user`.
+
+`src/auth/strategies/jwt-customer.strategy.ts`
 
 ```ts
 import { Injectable, UnauthorizedException } from '@nestjs/common';
@@ -1005,7 +1109,6 @@ export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-custome
   }
 
   async validate(payload: JwtPayload) {
-    // Find user in database
     const customer = await this.customerRepository.findOne({
       where: { id: payload.sub },
     });
@@ -1014,20 +1117,19 @@ export class JwtCustomerStrategy extends PassportStrategy(Strategy, 'jwt-custome
       throw new UnauthorizedException('User not found');
     }
 
-    // Return user object that will be attached to request.user
-    // This object is used by RolesGuard to check permissions
+    // Becomes request.user; RolesGuard reads role from here
     return {
       id: customer.id,
       email: customer.email,
       name: customer.name,
-      role: customer.role,      // Include role for RBAC
+      role: customer.role, // included for RBAC
       userType: 'customer',
     };
   }
 }
 ```
 
-**src/auth/strategies/jwt-driver.strategy.ts**
+`src/auth/strategies/jwt-driver.strategy.ts`
 
 ```ts
 import { Injectable, UnauthorizedException } from '@nestjs/common';
@@ -1053,7 +1155,6 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
   }
 
   async validate(payload: JwtPayload) {
-    // Find user in database
     const driver = await this.driverRepository.findOne({
       where: { id: payload.sub },
     });
@@ -1062,45 +1163,41 @@ export class JwtDriverStrategy extends PassportStrategy(Strategy, 'jwt-driver') 
       throw new UnauthorizedException('User not found');
     }
 
-    // Return user object that will be attached to request.user
-    // This object is used by RolesGuard to check permissions
     return {
       id: driver.id,
       email: driver.email,
       name: driver.name,
-      role: driver.role,        // Include role for RBAC
+      role: driver.role, // included for RBAC
       userType: 'driver',
     };
   }
 }
 ```
 
-**What Changed:**
-- Added `role: customer.role` / `role: driver.role` to returned object
-- This makes the role available in `request.user.role`
-- RolesGuard uses this to verify permissions
+**What changed:** `role` is added to the returned object, so `request.user.role` exists for the guard.
 
-**Flow:**
-1. User sends request with JWT token
-2. JWT strategy validates token and decodes payload
-3. Strategy queries database to get user with their role
-4. Strategy returns user object (including role) → attached to `request.user`
-5. RolesGuard reads `request.user.role` and checks against `@Roles()` decorator
+**Flow**
 
-## Step 6: Update Types
+1. Request arrives with a JWT.
+2. The strategy verifies the token and decodes the payload.
+3. The strategy loads the user (and role) from the database.
+4. The returned object is attached to `request.user`.
+5. `RolesGuard` compares `request.user.role` with `@Roles()`.
 
-Update authentication types to include role information.
+---
 
-**src/auth/types/auth.types.ts**
+## Role in the types
+
+`src/auth/types/auth.types.ts`
 
 ```ts
 import { Role } from '../enums/role.enum';
 
 export interface JwtPayload {
-  sub: string;                     // User ID
+  sub: string;                       // user ID
   email: string;
   name: string;
-  role: Role;                      // User's role
+  role: Role;                        // user's role
   userType: 'customer' | 'driver';
 }
 
@@ -1108,30 +1205,31 @@ export interface AuthenticatedUser {
   id: string;
   email: string;
   name: string;
-  role: Role;                      // User's role
+  role: Role;                        // user's role
   userType: 'customer' | 'driver';
 }
 ```
 
-**Why include role in JWT payload?**
-- **Fast Authorization:** Role is available without database query
-- **Stateless:** All needed info is in the token
-- **Reduced DB Load:** Don't need to fetch user on every request
+### Role in the JWT payload
 
-**Security Consideration:**
-- JWT payload is NOT encrypted (it's base64 encoded)
-- Don't store sensitive data in JWT
-- Roles are safe to include as they're not secret
-- Always verify role against database for critical operations
+| Benefit | Description |
+|---------|-------------|
+| Fast authorization | Role is available without extra work. |
+| Stateless | Everything needed is in the token. |
+| Lower DB load | No lookup solely to read the role. |
 
-## Step 7: Update Auth Service
+> **Security:** a JWT payload is base64-encoded, **not encrypted**. Never store secrets in it. Roles are safe to include, but they can go stale if a role changes before the token expires, so verify against the database for critical operations.
 
-Modify auth service to include role when generating JWT tokens.
+---
 
-**src/auth/auth.service.ts** (Updated login methods)
+## Role in the auth service
+
+Add `role` to the payload at login. Only the changed parts of the login methods are shown.
+
+`src/auth/auth.service.ts`
 
 ```ts
-// Customer Login
+// Customer login
 async loginCustomer(loginDto: LoginDto): Promise<AuthResponseDto> {
   const customer = await this.customerRepository.findOne({
     where: { email: loginDto.email },
@@ -1147,12 +1245,11 @@ async loginCustomer(loginDto: LoginDto): Promise<AuthResponseDto> {
     throw new UnauthorizedException('Invalid credentials');
   }
 
-  // Include role in JWT payload
   const payload: JwtPayload = {
     sub: customer.id,
     email: customer.email,
     name: customer.name,
-    role: customer.role,           // Add role to token
+    role: customer.role,           // role added to the token
     userType: 'customer',
   };
 
@@ -1163,15 +1260,11 @@ async loginCustomer(loginDto: LoginDto): Promise<AuthResponseDto> {
 
   return new AuthResponseDto({
     access_token: accessToken,
-    user: {
-      id: customer.id,
-      email: customer.email,
-      name: customer.name,
-    },
+    user: { id: customer.id, email: customer.email, name: customer.name },
   });
 }
 
-// Driver Login
+// Driver login
 async loginDriver(loginDto: LoginDto): Promise<AuthResponseDto> {
   const driver = await this.driverRepository.findOne({
     where: { email: loginDto.email },
@@ -1187,12 +1280,11 @@ async loginDriver(loginDto: LoginDto): Promise<AuthResponseDto> {
     throw new UnauthorizedException('Invalid credentials');
   }
 
-  // Include role in JWT payload
   const payload: JwtPayload = {
     sub: driver.id,
     email: driver.email,
     name: driver.name,
-    role: driver.role,             // Add role to token
+    role: driver.role,             // role added to the token
     userType: 'driver',
   };
 
@@ -1203,34 +1295,31 @@ async loginDriver(loginDto: LoginDto): Promise<AuthResponseDto> {
 
   return new AuthResponseDto({
     access_token: accessToken,
-    user: {
-      id: driver.id,
-      email: driver.email,
-      name: driver.name,
-    },
+    user: { id: driver.id, email: driver.email, name: driver.name },
   });
 }
 ```
 
-**What happens during login:**
-1. User provides email/password
-2. Service validates credentials
-3. Service creates JWT payload **with role**
-4. JWT token is signed and returned to user
-5. User includes token in subsequent requests
-6. JWT strategy decodes token and extracts role
-7. RolesGuard checks if user's role matches required roles
+**What happens at login**
 
-## Step 8: Using RBAC in Controllers
+1. User sends email and password.
+2. Service validates the credentials.
+3. Service builds the JWT payload **with the role**.
+4. The token is signed and returned.
+5. The client sends it on later requests.
+6. The strategy decodes it and loads the user and role.
+7. `RolesGuard` compares the role with the required roles.
 
-Apply role-based access control to your controller endpoints.
+---
 
-### Example: Admin Controller
+## Using RBAC in controllers
 
-**src/admin/admin.controller.ts**
+### Admin controller (class-level)
+
+`src/admin/admin.controller.ts`
 
 ```ts
-import { Controller, Get, Post, Delete, Param, UseGuards } from '@nestjs/common';
+import { Controller, Get, Delete, Param, UseGuards } from '@nestjs/common';
 import { JwtCustomerGuard } from '../auth/guards/jwt-customer.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -1239,40 +1328,37 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../auth/types/auth.types';
 
 @Controller('admin')
-@UseGuards(JwtCustomerGuard, RolesGuard)  // Apply both guards
-@Roles(Role.ADMIN)  // All routes require ADMIN role
+@UseGuards(JwtCustomerGuard, RolesGuard) // both guards
+@Roles(Role.ADMIN)                       // every route requires ADMIN
 export class AdminController {
-  
   @Get('users')
   getAllUsers(@CurrentUser() user: AuthenticatedUser) {
-    // Only admins can access this
     return { message: 'List of all users', admin: user.name };
   }
 
   @Get('statistics')
   getStatistics() {
-    // Only admins can access this
     return { message: 'System statistics' };
   }
 
   @Delete('users/:id')
   deleteUser(@Param('id') id: string) {
-    // Only admins can delete users
     return { message: `User ${id} deleted` };
   }
 }
 ```
 
-**Guard Order Matters:**
-1. `JwtCustomerGuard` - Validates JWT and populates `request.user`
-2. `RolesGuard` - Checks `request.user.role` against `@Roles()` decorator
+**Guard order matters**
 
-### Example: Mixed Roles Controller
+1. `JwtCustomerGuard` validates the JWT and fills `request.user`.
+2. `RolesGuard` checks `request.user.role` against `@Roles()`.
 
-**src/orders/orders.controller.ts**
+### Mixed roles controller (method-level)
+
+`src/orders/orders.controller.ts`
 
 ```ts
-import { Controller, Get, Post, Patch, Param, Body, UseGuards } from '@nestjs/common';
+import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
 import { JwtCustomerGuard } from '../auth/guards/jwt-customer.guard';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
@@ -1281,54 +1367,55 @@ import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { AuthenticatedUser } from '../auth/types/auth.types';
 
 @Controller('orders')
-@UseGuards(JwtCustomerGuard, RolesGuard)  // Apply to entire controller
+@UseGuards(JwtCustomerGuard, RolesGuard) // applies to the whole controller
 export class OrdersController {
-  
   @Post()
-  @Roles(Role.CUSTOMER)  // Only customers can create orders
+  @Roles(Role.CUSTOMER)                  // only customers create orders
   createOrder(@CurrentUser() user: AuthenticatedUser, @Body() createOrderDto) {
     return { message: 'Order created', customerId: user.id };
   }
 
   @Get('my-orders')
-  @Roles(Role.CUSTOMER)  // Only customers can view their orders
+  @Roles(Role.CUSTOMER)
   getMyOrders(@CurrentUser() user: AuthenticatedUser) {
     return { message: 'Your orders', customerId: user.id };
   }
 
   @Get('all')
-  @Roles(Role.ADMIN, Role.MANAGER)  // Admins OR managers can view all orders
+  @Roles(Role.ADMIN, Role.MANAGER)       // admins OR managers
   getAllOrders() {
     return { message: 'All orders in the system' };
   }
 
   @Patch(':id/status')
-  @Roles(Role.ADMIN, Role.MANAGER, Role.DRIVER)  // Multiple roles allowed
+  @Roles(Role.ADMIN, Role.MANAGER, Role.DRIVER) // multiple roles allowed
   updateOrderStatus(@Param('id') id: string, @Body() statusDto) {
     return { message: `Order ${id} status updated` };
   }
 
   @Delete(':id')
-  @Roles(Role.ADMIN)  // Only admins can delete orders
+  @Roles(Role.ADMIN)
   deleteOrder(@Param('id') id: string) {
     return { message: `Order ${id} deleted` };
   }
 }
 ```
 
-**Access Matrix:**
+**Access matrix**
 
 | Endpoint | Admin | Manager | Driver | Customer |
-|----------|-------|---------|--------|----------|
-| POST /orders | ❌ | ❌ | ❌ | ✅ |
-| GET /orders/my-orders | ❌ | ❌ | ❌ | ✅ |
-| GET /orders/all | ✅ | ✅ | ❌ | ❌ |
-| PATCH /orders/:id/status | ✅ | ✅ | ✅ | ❌ |
-| DELETE /orders/:id | ✅ | ❌ | ❌ | ❌ |
+|----------|:-----:|:-------:|:------:|:--------:|
+| `POST /orders` | No | No | No | Yes |
+| `GET /orders/my-orders` | No | No | No | Yes |
+| `GET /orders/all` | Yes | Yes | No | No |
+| `PATCH /orders/:id/status` | Yes | Yes | Yes | No |
+| `DELETE /orders/:id` | Yes | No | No | No |
 
-### Example: Public + Protected Routes
+> **Heads up:** this controller authenticates with `JwtCustomerGuard`, which validates against the **customers** table. A user from the **drivers** table carries a driver token (signed with `driverSecret`) and would fail that guard, so the `Role.DRIVER` entry on `PATCH :id/status` never gets reached. To let drivers through, use a guard that accepts both strategies (for example `AuthGuard(['jwt-customer', 'jwt-driver'])`) or put driver routes behind `JwtDriverGuard`.
 
-**src/products/products.controller.ts**
+### Public and protected routes together
+
+`src/products/products.controller.ts`
 
 ```ts
 import { Controller, Get, Post, Patch, Delete, Param, Body, UseGuards } from '@nestjs/common';
@@ -1339,20 +1426,19 @@ import { Role } from '../auth/enums/role.enum';
 
 @Controller('products')
 export class ProductsController {
-  
-  // Public route - No guards
+  // Public: no guards
   @Get()
   getAllProducts() {
     return { message: 'Public product list' };
   }
 
-  // Public route - No guards
+  // Public: no guards
   @Get(':id')
   getProduct(@Param('id') id: string) {
     return { message: `Product ${id} details` };
   }
 
-  // Protected route - Admin only
+  // Protected: admin or manager
   @Post()
   @UseGuards(JwtCustomerGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.MANAGER)
@@ -1360,7 +1446,7 @@ export class ProductsController {
     return { message: 'Product created' };
   }
 
-  // Protected route - Admin only
+  // Protected: admin or manager
   @Patch(':id')
   @UseGuards(JwtCustomerGuard, RolesGuard)
   @Roles(Role.ADMIN, Role.MANAGER)
@@ -1368,7 +1454,7 @@ export class ProductsController {
     return { message: `Product ${id} updated` };
   }
 
-  // Protected route - Admin only
+  // Protected: admin only
   @Delete(':id')
   @UseGuards(JwtCustomerGuard, RolesGuard)
   @Roles(Role.ADMIN)
@@ -1378,47 +1464,43 @@ export class ProductsController {
 }
 ```
 
-**Route Types:**
-- **Public Routes:** No `@UseGuards()` - anyone can access
-- **Protected Routes:** Require authentication + specific roles
-- Mix both in same controller by applying guards at method level
+| Route type | How |
+|------------|-----|
+| Public | No `@UseGuards()`: anyone can access. |
+| Protected | Authentication guard plus `RolesGuard` and `@Roles()`. |
+| Mixed | Apply the guards at **method level** in the same controller. |
 
-## Step 9: Global vs Route-level Guards
+---
 
-### Option 1: Route-level (Recommended)
+## Global vs route-level guards
 
-Apply guards to specific controllers/routes:
+### Option 1: Route-level (recommended)
 
 ```ts
 @Controller('admin')
-@UseGuards(JwtCustomerGuard, RolesGuard)  // Controller-level
+@UseGuards(JwtCustomerGuard, RolesGuard) // controller-level
 @Roles(Role.ADMIN)
 export class AdminController {
-  // All routes protected
+  // all routes protected
 }
 
 @Controller('products')
 export class ProductsController {
-  
-  @Get()  // Public
+  @Get() // public
   getAll() {}
 
   @Post()
-  @UseGuards(JwtCustomerGuard, RolesGuard)  // Route-level
+  @UseGuards(JwtCustomerGuard, RolesGuard) // route-level
   @Roles(Role.ADMIN)
-  create() {}  // Protected
+  create() {} // protected
 }
 ```
 
-**Advantages:**
-- Fine-grained control
-- Mix public and protected routes easily
-- Clear which routes are protected
-- Easy to maintain
+Advantages: fine-grained control, easy to mix public and protected routes, clear which routes are protected, easy to maintain.
 
-### Option 2: Global Guards
+### Option 2: Global guard
 
-Apply guards globally in `main.ts`:
+`main.ts`
 
 ```ts
 import { NestFactory, Reflector } from '@nestjs/core';
@@ -1427,54 +1509,45 @@ import { RolesGuard } from './auth/guards/roles.guard';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
-  
+
   // Global RolesGuard
   const reflector = app.get(Reflector);
   app.useGlobalGuards(new RolesGuard(reflector));
-  
+
   await app.listen(3000);
 }
 bootstrap();
 ```
 
-**Advantages:**
-- Applied automatically to all routes
-- DRY (Don't Repeat Yourself)
-- Centralized configuration
+| Advantages | Disadvantages |
+|------------|---------------|
+| Applied to all routes automatically | Public routes must be marked explicitly |
+| DRY, centralized configuration | Less flexible |
+| | Harder to debug |
 
-**Disadvantages:**
-- Need to explicitly mark public routes
-- Less flexible
-- Harder to debug
+### Option 3: Hybrid
 
-### Option 3: Hybrid Approach
+Global authentication, route-level roles.
 
-Combine global authentication with route-level role checks:
-
-**main.ts:**
 ```ts
-// Global authentication guard
+// main.ts: global authentication guard
 app.useGlobalGuards(new JwtAuthGuard());
 ```
 
-**Controllers:**
 ```ts
 @Controller('products')
 export class ProductsController {
-  
   @Get()
-  @Public()  // Custom decorator to skip auth
+  @Public()            // custom decorator to skip auth
   getAll() {}
 
   @Post()
-  @Roles(Role.ADMIN)  // Add role requirement
+  @Roles(Role.ADMIN)   // add role requirement
   create() {}
 }
 ```
 
-**Custom @Public() decorator:**
-
-**src/auth/decorators/public.decorator.ts**
+`src/auth/decorators/public.decorator.ts`
 
 ```ts
 import { SetMetadata } from '@nestjs/common';
@@ -1483,11 +1556,15 @@ export const IS_PUBLIC_KEY = 'isPublic';
 export const Public = () => SetMetadata(IS_PUBLIC_KEY, true);
 ```
 
-## Advanced: Permission-based Access Control
+> The global guard must read `IS_PUBLIC_KEY` through `Reflector` and skip authentication when it is set.
 
-For more granular control, implement permission-based access:
+---
 
-**src/auth/enums/permission.enum.ts**
+## Permission-based access control
+
+For finer granularity than roles, map each role to a set of permissions and check permissions instead.
+
+`src/auth/enums/permission.enum.ts`
 
 ```ts
 export enum Permission {
@@ -1496,13 +1573,13 @@ export enum Permission {
   READ_USER = 'read:user',
   UPDATE_USER = 'update:user',
   DELETE_USER = 'delete:user',
-  
+
   // Order permissions
   CREATE_ORDER = 'create:order',
   READ_ORDER = 'read:order',
   UPDATE_ORDER = 'update:order',
   DELETE_ORDER = 'delete:order',
-  
+
   // Product permissions
   CREATE_PRODUCT = 'create:product',
   READ_PRODUCT = 'read:product',
@@ -1511,7 +1588,7 @@ export enum Permission {
 }
 ```
 
-**src/auth/constants/role-permissions.ts**
+`src/auth/constants/role-permissions.ts`
 
 ```ts
 import { Role } from '../enums/role.enum';
@@ -1519,10 +1596,9 @@ import { Permission } from '../enums/permission.enum';
 
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   [Role.ADMIN]: [
-    // Admins have all permissions
-    ...Object.values(Permission),
+    ...Object.values(Permission), // admins have all permissions
   ],
-  
+
   [Role.MANAGER]: [
     Permission.READ_USER,
     Permission.UPDATE_USER,
@@ -1533,12 +1609,12 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     Permission.READ_PRODUCT,
     Permission.UPDATE_PRODUCT,
   ],
-  
+
   [Role.DRIVER]: [
     Permission.READ_ORDER,
     Permission.UPDATE_ORDER,
   ],
-  
+
   [Role.CUSTOMER]: [
     Permission.READ_USER,
     Permission.UPDATE_USER,
@@ -1549,7 +1625,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
 };
 ```
 
-**src/auth/decorators/permissions.decorator.ts**
+`src/auth/decorators/permissions.decorator.ts`
 
 ```ts
 import { SetMetadata } from '@nestjs/common';
@@ -1560,7 +1636,7 @@ export const RequirePermissions = (...permissions: Permission[]) =>
   SetMetadata(PERMISSIONS_KEY, permissions);
 ```
 
-**src/auth/guards/permissions.guard.ts**
+`src/auth/guards/permissions.guard.ts`
 
 ```ts
 import { Injectable, CanActivate, ExecutionContext, ForbiddenException } from '@nestjs/common';
@@ -1590,10 +1666,10 @@ export class PermissionsGuard implements CanActivate {
       throw new ForbiddenException('User not authenticated');
     }
 
-    // Get permissions for user's role
+    // Permissions for the user's role
     const userPermissions = ROLE_PERMISSIONS[user.role] || [];
 
-    // Check if user has all required permissions
+    // User must have ALL required permissions
     const hasAllPermissions = requiredPermissions.every((permission) =>
       userPermissions.includes(permission),
     );
@@ -1609,13 +1685,12 @@ export class PermissionsGuard implements CanActivate {
 }
 ```
 
-**Usage:**
+Usage:
 
 ```ts
 @Controller('users')
 @UseGuards(JwtCustomerGuard, PermissionsGuard)
 export class UsersController {
-  
   @Post()
   @RequirePermissions(Permission.CREATE_USER)
   create(@Body() createUserDto) {
@@ -1636,34 +1711,38 @@ export class UsersController {
 }
 ```
 
-## Best Practices
+| | `RolesGuard` | `PermissionsGuard` |
+|--|--------------|--------------------|
+| Logic | **Any** required role matches (OR) | **All** required permissions held (AND) |
+| Source | `user.role` | `ROLE_PERMISSIONS[user.role]` |
 
-### 1. **Always Use Guards in Correct Order**
+---
+
+## Best practices
+
+### 1. Apply guards in the correct order
 
 ```ts
-// ✅ Correct Order
+// Correct
 @UseGuards(JwtCustomerGuard, RolesGuard)
 
-// ❌ Wrong Order - RolesGuard runs before authentication
+// Wrong: RolesGuard runs before authentication
 @UseGuards(RolesGuard, JwtCustomerGuard)
 ```
 
-**Why?** JwtCustomerGuard populates `request.user`, which RolesGuard needs.
+`JwtCustomerGuard` populates `request.user`, which `RolesGuard` needs.
 
-### 2. **Use Enums for Type Safety**
+### 2. Use enums for type safety
 
 ```ts
-// ✅ Good - Type safe, autocomplete works
-@Roles(Role.ADMIN, Role.MANAGER)
-
-// ❌ Bad - Prone to typos, no autocomplete
-@Roles('admin', 'manager')
+@Roles(Role.ADMIN, Role.MANAGER)   // type-safe, autocomplete works
+@Roles('admin', 'manager')         // typo-prone, no autocomplete
 ```
 
-### 3. **Prefer Class-level Guards When Possible**
+### 3. Prefer class-level guards when possible
 
 ```ts
-// ✅ Good - DRY, all routes protected
+// DRY: all routes protected
 @Controller('admin')
 @UseGuards(JwtCustomerGuard, RolesGuard)
 @Roles(Role.ADMIN)
@@ -1672,14 +1751,14 @@ export class AdminController {
   @Get('stats') getStats() {}
 }
 
-// ❌ Repetitive - same guards on every route
+// Repetitive: same guards on every route
 @Controller('admin')
 export class AdminController {
   @Get('users')
   @UseGuards(JwtCustomerGuard, RolesGuard)
   @Roles(Role.ADMIN)
   getUsers() {}
-  
+
   @Get('stats')
   @UseGuards(JwtCustomerGuard, RolesGuard)
   @Roles(Role.ADMIN)
@@ -1687,60 +1766,56 @@ export class AdminController {
 }
 ```
 
-### 4. **Validate Roles Against Database for Critical Operations**
+### 4. Re-verify roles in the database for critical operations
+
+JWTs can go stale when a user's role changes.
 
 ```ts
 @Delete('users/:id')
 @Roles(Role.ADMIN)
 async deleteUser(@Param('id') id: string, @CurrentUser() user: AuthenticatedUser) {
-  // Double-check role from database for critical operations
   const currentUser = await this.userRepository.findOne({ where: { id: user.id } });
-  
+
   if (currentUser.role !== Role.ADMIN) {
     throw new ForbiddenException('Role verification failed');
   }
-  
-  // Proceed with deletion
+
   return this.userService.delete(id);
 }
 ```
 
-**Why?** JWT tokens can become stale if user's role changes. For critical operations, verify against database.
-
-### 5. **Use Descriptive Error Messages**
+### 5. Use descriptive error messages
 
 ```ts
-// ✅ Good - Helpful error message
+// Good
 throw new ForbiddenException(
-  `Access denied. Required roles: ${requiredRoles.join(', ')}. Your role: ${user.role}`
+  `Access denied. Required roles: ${requiredRoles.join(', ')}. Your role: ${user.role}`,
 );
 
-// ❌ Bad - Generic message
+// Bad
 throw new ForbiddenException('Access denied');
 ```
 
-### 6. **Document Role Requirements**
+### 6. Document role requirements
 
 ```ts
 /**
  * Delete a user from the system
- * @requires Role.ADMIN - Only administrators can delete users
- * @param id - User ID to delete
+ * @requires Role.ADMIN - only administrators can delete users
+ * @param id - user ID to delete
  */
 @Delete(':id')
 @Roles(Role.ADMIN)
-async deleteUser(@Param('id') id: string) {
-  // ...
-}
+async deleteUser(@Param('id') id: string) {}
 ```
 
-### 7. **Test Role-based Access**
+### 7. Test role-based access
 
 ```ts
 describe('AdminController', () => {
   it('should allow admin to access dashboard', async () => {
     const adminToken = 'valid-admin-token';
-    const response = await request(app.getHttpServer())
+    await request(app.getHttpServer())
       .get('/admin/dashboard')
       .set('Authorization', `Bearer ${adminToken}`)
       .expect(200);
@@ -1756,103 +1831,73 @@ describe('AdminController', () => {
 });
 ```
 
-## Common Pitfalls
+---
 
-### 1. **Forgetting to Apply RolesGuard**
+## Common mistakes
+
+| # | Pitfall | Fix |
+|---|---------|-----|
+| 1 | `@Roles()` used without `RolesGuard` (does nothing) | Add `@UseGuards(JwtCustomerGuard, RolesGuard)` |
+| 2 | Wrong guard order (`RolesGuard` first) | Authentication guard first |
+| 3 | Role missing from the strategy's returned user | Return `role` from `validate()` |
+| 4 | Hard-coded role strings | Use the `Role` enum |
+| 5 | Assuming `request.user` exists | Check `user` and `user.role` before comparing |
+| 6 | Using one secret for customers and drivers | A token for one user type could validate as the other | Keep separate secrets (`customerSecret`, `driverSecret`) and strategies |
+| 7 | Leaving the fallback secrets in `constants.ts` for production | Anyone who reads the repo can forge tokens | Set `JWT_CUSTOMER_SECRET` and `JWT_DRIVER_SECRET` in the environment |
+| 8 | Returning the saved entity from register | The password hash is sent to the client | Return a response DTO (`CustomerResponseDto`) with `@Exclude()` and `ClassSerializerInterceptor` |
 
 ```ts
-// ❌ Wrong - @Roles() won't work without RolesGuard
+// 1. Missing RolesGuard
 @Controller('admin')
+@Roles(Role.ADMIN)                              // wrong: metadata is never checked
+export class AdminController {}
+
+@Controller('admin')
+@UseGuards(JwtCustomerGuard, RolesGuard)        // correct
 @Roles(Role.ADMIN)
 export class AdminController {}
 
-// ✅ Correct
-@Controller('admin')
-@UseGuards(JwtCustomerGuard, RolesGuard)
-@Roles(Role.ADMIN)
-export class AdminController {}
-```
-
-### 2. **Wrong Guard Order**
-
-```ts
-// ❌ Wrong - RolesGuard can't access request.user
-@UseGuards(RolesGuard, JwtCustomerGuard)
-
-// ✅ Correct - JwtCustomerGuard populates request.user first
-@UseGuards(JwtCustomerGuard, RolesGuard)
-```
-
-### 3. **Not Including Role in JWT Strategy**
-
-```ts
-// ❌ Wrong - Role not included
+// 3. Role missing in validate()
 async validate(payload: JwtPayload) {
-  return {
-    id: user.id,
-    email: user.email,
-    // Missing: role: user.role
-  };
+  return { id: user.id, email: user.email };                 // wrong
+  return { id: user.id, email: user.email, role: user.role }; // correct
 }
 
-// ✅ Correct
-async validate(payload: JwtPayload) {
-  return {
-    id: user.id,
-    email: user.email,
-    role: user.role,  // RolesGuard needs this
-  };
-}
-```
+// 5. Unchecked user
+const hasRole = requiredRoles.some((role) => user.role === role);   // wrong: user may be undefined
 
-### 4. **Hardcoding Roles**
-
-```ts
-// ❌ Bad - Magic strings
-@Roles('admin', 'manager')
-
-// ✅ Good - Type-safe enum
-@Roles(Role.ADMIN, Role.MANAGER)
-```
-
-### 5. **Not Handling Edge Cases**
-
-```ts
-// ❌ Bad - Assumes user exists
-const hasRole = requiredRoles.some((role) => user.role === role);
-
-// ✅ Good - Checks if user exists
 if (!user || !user.role) {
-  throw new ForbiddenException('User not authenticated');
+  throw new ForbiddenException('User not authenticated');           // correct
 }
-const hasRole = requiredRoles.some((role) => user.role === role);
 ```
+
+---
 
 ## Summary
 
-Role-based Access Control in NestJS involves:
+| Step | What |
+|------|------|
+| 1 | Define roles in an enum. |
+| 2 | Store the role on the user entities. |
+| 3 | Create the `@Roles()` decorator. |
+| 4 | Create `RolesGuard`. |
+| 5 | Return `role` from the JWT strategies. |
+| 6 | Add `role` to the types. |
+| 7 | Include `role` in the JWT payload at login. |
+| 8 | Apply `@UseGuards()` and `@Roles()` in controllers. |
 
-1. **Define Roles** - Create enum with all possible roles
-2. **Store Roles** - Add role field to user entities
-3. **Create Decorator** - `@Roles()` to mark required roles
-4. **Create Guard** - `RolesGuard` to verify user has required role
-5. **Update Strategies** - Include role in JWT validation
-6. **Update Types** - Add role to interfaces
-7. **Update Auth Service** - Include role in JWT payload
-8. **Apply to Controllers** - Use `@UseGuards()` and `@Roles()`
+| Concept | Role in the system |
+|---------|--------------------|
+| Roles | Which user types exist (admin, customer, driver, manager). |
+| `@Roles()` | Marks endpoints with required roles. |
+| `RolesGuard` | Enforces the requirement. |
+| JWT strategy | Supplies the user's role to the guard. |
+| Order | Authentication guard, then role guard. |
 
-**Key Concepts:**
-- **Roles** = What user types exist (admin, customer, driver)
-- **@Roles() Decorator** = Marks endpoints with required roles
-- **RolesGuard** = Enforces role requirements
-- **JWT Strategy** = Provides user's role to guard
-- **Order Matters** = Authentication guard → Role guard
+**Security tips**
 
-**Security Tips:**
-- Always validate JWT before checking roles
-- Use enums for type safety
-- Double-check roles from DB for critical operations
-- Provide clear error messages
-- Test role-based access thoroughly
-
-```
+- Always validate the JWT before checking roles.
+- Use enums for type safety.
+- Double-check roles from the database for critical operations.
+- Provide clear error messages.
+- Test role-based access thoroughly.

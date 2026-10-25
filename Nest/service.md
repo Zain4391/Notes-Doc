@@ -1,29 +1,53 @@
-# NestJS Service Layer - Complete Guide
+# NestJS Service Layer
 
-## What is a Service?
+Writing services: structure and dependency injection, TypeORM CRUD, DTOs, pagination, sorting, filtering, aggregation, and service-level concerns (errors, transactions, caching, logging, testing).
 
-A **Service** in NestJS is a provider class that contains business logic, data manipulation, and application functionality. Services are the heart of your application where the actual work happens.
+**Contents**
 
-**Key Characteristics:**
-- Decorated with `@Injectable()` decorator
-- Contains business logic (what controllers should NOT have)
-- Manages data operations (CRUD operations)
-- Can be injected into controllers, other services, guards, interceptors, etc.
-- Typically singleton scope (one instance shared across the app)
-- Testable and reusable
+1. [What is a service](#what-is-a-service)
+2. [Basic service structure](#basic-service-structure)
+3. [Entities used in this guide](#entities-used-in-this-guide)
+4. [Customers service](#customers-service)
+5. [Delivery drivers service](#delivery-drivers-service)
+6. [Pagination with nestjs-typeorm-paginate](#pagination-with-nestjs-typeorm-paginate)
+7. [QueryBuilder aliases vs table names](#querybuilder-aliases-vs-table-names)
+8. [Pagination patterns](#pagination-patterns)
+9. [Sorting patterns](#sorting-patterns)
+10. [Advanced query patterns](#advanced-query-patterns)
+11. [Service best practices](#service-best-practices)
+12. [Service testing](#service-testing)
+13. [Key takeaways](#key-takeaways)
+14. [Common patterns summary](#common-patterns-summary)
+15. [Common mistakes](#common-mistakes)
 
-**Why Services?**
-- **Separation of Concerns** - Controllers handle HTTP, services handle logic
-- **Reusability** - Services can be used in multiple controllers
-- **Testability** - Easy to unit test in isolation
-- **Maintainability** - Business logic centralized in one place
-- **Dependency Injection** - Easy to mock and swap implementations
+Related: [Controllers](controller.md) · [Custom Exceptions](custom-exception.md) · [TypeORM + Supabase](typeorm-config.md) · [JWT Authentication](jwt-authentication.md)
 
 ---
 
-## Basic Service Structure
+## What is a service
 
-### 1. Simple Service (No Database)
+A **service** is a provider class that holds business logic, data manipulation and application functionality. Controllers handle HTTP; services do the actual work.
+
+| Characteristic | Detail |
+|----------------|--------|
+| Decorator | `@Injectable()` |
+| Contains | Business logic (what controllers should **not** have) and data operations (CRUD). |
+| Injected into | Controllers, other services, guards, interceptors, etc. |
+| Scope | Singleton by default (one instance shared across the app). |
+
+| Why services | Benefit |
+|--------------|---------|
+| Separation of concerns | Controllers handle HTTP, services handle logic. |
+| Reusability | One service can serve several controllers. |
+| Testability | Easy to unit test in isolation. |
+| Maintainability | Business logic lives in one place. |
+| Dependency injection | Easy to mock and swap implementations. |
+
+---
+
+## Basic service structure
+
+### Simple service (no dependencies)
 
 ```ts
 import { Injectable } from '@nestjs/common';
@@ -40,15 +64,11 @@ export class AppService {
 }
 ```
 
-**Key Points:**
-- Must have `@Injectable()` decorator
-- Export the class so it can be imported in modules
-- Methods contain business logic
-- Can be simple (no dependencies) or complex (with dependencies)
+- Must have `@Injectable()`.
+- Must be exported so a module can list it in `providers`.
+- Methods contain the business logic.
 
----
-
-### 2. Service with Dependencies (Dependency Injection)
+### Service with dependencies (dependency injection)
 
 ```ts
 import { Injectable } from '@nestjs/common';
@@ -58,8 +78,8 @@ import { LoggerService } from '../logger/logger.service';
 @Injectable()
 export class UserService {
   constructor(
-    private configService: ConfigService,  // Inject ConfigService
-    private logger: LoggerService,          // Inject LoggerService
+    private configService: ConfigService,  // injected
+    private logger: LoggerService,         // injected
   ) {}
 
   getMaxUsers(): number {
@@ -70,21 +90,20 @@ export class UserService {
 }
 ```
 
-**How Dependency Injection Works:**
-1. NestJS sees `UserService` needs `ConfigService` and `LoggerService`
-2. It creates instances of those services (or reuses existing ones)
-3. Injects them into `UserService` constructor
-4. `UserService` can now use them via `this.configService` and `this.logger`
+**How injection works**
+
+1. Nest sees that `UserService` needs `ConfigService` and `LoggerService`.
+2. It creates those instances (or reuses existing ones).
+3. It passes them into the constructor.
+4. `UserService` uses them through `this.configService` and `this.logger`.
 
 ---
 
-## Service with TypeORM (Database Operations)
+## Entities used in this guide
 
-For this guide, we'll use the entities from our JWT authentication example:
-- **Customer Entity** - Represents customers
-- **DeliveryDriver Entity** - Represents delivery drivers
+The examples use the entities from the JWT authentication guide (`jwt-authentication.md`).
 
-### Customer Entity Review
+### Customer
 
 ```ts
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
@@ -114,7 +133,7 @@ export class Customer {
 }
 ```
 
-### Delivery Driver Entity Review
+### Delivery driver
 
 ```ts
 import { Entity, Column, PrimaryGeneratedColumn, CreateDateColumn } from 'typeorm';
@@ -142,10 +161,7 @@ export class DeliveryDriver {
   @Column()
   phone: string;
 
-  @Column({
-    type: 'enum',
-    enum: VEHICLE_TYPE,
-  })
+  @Column({ type: 'enum', enum: VEHICLE_TYPE })
   vehicle_type: VEHICLE_TYPE;
 
   @Column({ nullable: true })
@@ -161,13 +177,11 @@ export class DeliveryDriver {
 
 ---
 
-## Complete Service Example - Customers Service
+## Customers service
 
-### DTOs (Data Transfer Objects)
+### DTOs
 
-First, let's create DTOs for our service operations:
-
-**src/customers/dto/create-customer.dto.ts**
+`src/customers/dto/create-customer.dto.ts`
 
 ```ts
 import { IsEmail, IsNotEmpty, IsString, IsOptional, MinLength } from 'class-validator';
@@ -195,34 +209,19 @@ export class CreateCustomerDto {
 }
 ```
 
-**src/customers/dto/update-customer.dto.ts**
+`src/customers/dto/update-customer.dto.ts`
 
 ```ts
-import { IsEmail, IsString, IsOptional, MinLength } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateCustomerDto } from './create-customer.dto';
 
-// PartialType makes all fields optional
-export class UpdateCustomerDto extends PartialType(CreateCustomerDto) {
-  @IsString()
-  @IsOptional()
-  name?: string;
-
-  @IsEmail()
-  @IsOptional()
-  email?: string;
-
-  @IsString()
-  @IsOptional()
-  address?: string;
-
-  @IsString()
-  @IsOptional()
-  profile_image_url?: string;
-}
+// PartialType copies every field of CreateCustomerDto, with its validators, and makes all of them optional
+export class UpdateCustomerDto extends PartialType(CreateCustomerDto) {}
 ```
 
-**src/customers/dto/query-customer.dto.ts**
+> `PartialType` already marks each field optional and keeps its validation decorators, so redeclaring the fields (with `@IsOptional()`) is not needed. Add fields only for properties that do not exist on the create DTO (e.g. `is_available` for drivers).
+
+`src/customers/dto/query-customer.dto.ts`
 
 ```ts
 import { IsOptional, IsString, IsInt, Min, Max, IsIn } from 'class-validator';
@@ -258,16 +257,20 @@ export class QueryCustomerDto {
 }
 ```
 
----
+| Decorator | Purpose |
+|-----------|---------|
+| `@Type(() => Number)` | Converts the query string value (always a string) to a number. |
+| `@IsIn([...])` | Whitelists values, so `sortBy` cannot inject arbitrary column names. |
+| `= 1`, `= 10`, ... | Defaults used when the parameter is missing (needs `transform: true` in `ValidationPipe`). |
 
-### Customers Service Implementation
+### Service
 
-**src/customers/customers.service.ts**
+`src/customers/customers.service.ts`
 
 ```ts
-import { Injectable, NotFoundException, ConflictException, BadRequestException } from '@nestjs/common';
+import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, Like, ILike } from 'typeorm';
+import { Repository, ILike } from 'typeorm';
 import { Customer } from './entities/customer.entity';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
@@ -282,12 +285,8 @@ export class CustomersService {
   ) {}
 
   // ==================== CREATE ====================
-  
-  /**
-   * Create a new customer
-   * @param createCustomerDto - Customer data
-   * @returns Created customer
-   */
+
+  /** Create a new customer. */
   async create(createCustomerDto: CreateCustomerDto): Promise<Customer> {
     // Check if email already exists
     const existingCustomer = await this.customerRepository.findOne({
@@ -302,53 +301,39 @@ export class CustomersService {
     const saltRounds = 10;
     const hashedPassword = await bcrypt.hash(createCustomerDto.password, saltRounds);
 
-    // Create customer entity
+    // Create entity, then save
     const customer = this.customerRepository.create({
       ...createCustomerDto,
       password: hashedPassword,
     });
 
-    // Save to database
     return await this.customerRepository.save(customer);
   }
 
   // ==================== READ ====================
 
-  /**
-   * Find all customers with pagination and sorting
-   * @param queryDto - Query parameters for filtering, pagination, sorting
-   * @returns Paginated list of customers
-   */
+  /** Find all customers with search, pagination and sorting. */
   async findAll(queryDto: QueryCustomerDto) {
     const { search, page, limit, sortBy, sortOrder } = queryDto;
 
-    // Calculate pagination
     const skip = (page - 1) * limit;
 
-    // Build query
     const queryBuilder = this.customerRepository.createQueryBuilder('customer');
 
-    // Apply search filter (if provided)
+    // Search filter (if provided)
     if (search) {
       queryBuilder.where(
         'customer.name ILIKE :search OR customer.email ILIKE :search OR customer.address ILIKE :search',
-        { search: `%${search}%` }
+        { search: `%${search}%` },
       );
     }
 
-    // Apply sorting
     queryBuilder.orderBy(`customer.${sortBy}`, sortOrder);
-
-    // Apply pagination
     queryBuilder.skip(skip).take(limit);
 
-    // Execute query
     const [customers, total] = await queryBuilder.getManyAndCount();
 
-    // Calculate pagination metadata
     const totalPages = Math.ceil(total / limit);
-    const hasNextPage = page < totalPages;
-    const hasPrevPage = page > 1;
 
     return {
       data: customers,
@@ -357,21 +342,15 @@ export class CustomersService {
         page,
         limit,
         totalPages,
-        hasNextPage,
-        hasPrevPage,
+        hasNextPage: page < totalPages,
+        hasPrevPage: page > 1,
       },
     };
   }
 
-  /**
-   * Find one customer by ID
-   * @param id - Customer ID
-   * @returns Customer entity
-   */
+  /** Find one customer by ID, or throw 404. */
   async findOne(id: string): Promise<Customer> {
-    const customer = await this.customerRepository.findOne({
-      where: { id },
-    });
+    const customer = await this.customerRepository.findOne({ where: { id } });
 
     if (!customer) {
       throw new NotFoundException(`Customer with ID ${id} not found`);
@@ -380,30 +359,18 @@ export class CustomersService {
     return customer;
   }
 
-  /**
-   * Find customer by email
-   * @param email - Customer email
-   * @returns Customer entity or null
-   */
+  /** Find a customer by email, or null. */
   async findByEmail(email: string): Promise<Customer | null> {
-    return await this.customerRepository.findOne({
-      where: { email },
-    });
+    return await this.customerRepository.findOne({ where: { email } });
   }
 
   // ==================== UPDATE ====================
 
-  /**
-   * Update customer by ID
-   * @param id - Customer ID
-   * @param updateCustomerDto - Updated customer data
-   * @returns Updated customer
-   */
+  /** Update a customer by ID. */
   async update(id: string, updateCustomerDto: UpdateCustomerDto): Promise<Customer> {
-    // Check if customer exists
     const customer = await this.findOne(id);
 
-    // If email is being updated, check if new email already exists
+    // If the email changes, make sure the new one is free
     if (updateCustomerDto.email && updateCustomerDto.email !== customer.email) {
       const existingCustomer = await this.findByEmail(updateCustomerDto.email);
       if (existingCustomer) {
@@ -411,7 +378,7 @@ export class CustomersService {
       }
     }
 
-    // Hash password if provided
+    // Hash the password if provided
     if (updateCustomerDto.password) {
       const saltRounds = 10;
       updateCustomerDto.password = await bcrypt.hash(updateCustomerDto.password, saltRounds);
@@ -424,24 +391,16 @@ export class CustomersService {
 
   // ==================== DELETE ====================
 
-  /**
-   * Remove customer by ID
-   * @param id - Customer ID
-   * @returns Deletion result
-   */
+  /** Hard delete a customer by ID. */
   async remove(id: string): Promise<void> {
     const customer = await this.findOne(id);
     await this.customerRepository.remove(customer);
   }
 
-  /**
-   * Soft delete customer by ID (alternative)
-   * @param id - Customer ID
-   * @returns Update result
-   */
+  /** Soft delete (alternative). Requires a @DeleteDateColumn() on the entity. */
   async softDelete(id: string): Promise<void> {
     const result = await this.customerRepository.softDelete(id);
-    
+
     if (result.affected === 0) {
       throw new NotFoundException(`Customer with ID ${id} not found`);
     }
@@ -449,48 +408,64 @@ export class CustomersService {
 
   // ==================== ADVANCED QUERIES ====================
 
-  /**
-   * Count total customers
-   * @returns Total number of customers
-   */
+  /** Count total customers. */
   async count(): Promise<number> {
     return await this.customerRepository.count();
   }
 
-  /**
-   * Find customers by address (partial match)
-   * @param address - Address to search
-   * @returns Array of customers
-   */
+  /** Find customers by address (case-insensitive partial match). */
   async findByAddress(address: string): Promise<Customer[]> {
     return await this.customerRepository.find({
-      where: {
-        address: ILike(`%${address}%`), // Case-insensitive LIKE
-      },
+      where: { address: ILike(`%${address}%`) },
     });
   }
 
-  /**
-   * Find recently created customers
-   * @param limit - Number of customers to return
-   * @returns Array of recent customers
-   */
+  /** Find the most recently created customers. */
   async findRecent(limit: number = 10): Promise<Customer[]> {
     return await this.customerRepository.find({
-      order: {
-        created_at: 'DESC',
-      },
+      order: { created_at: 'DESC' },
       take: limit,
     });
   }
 }
 ```
 
+### Method reference
+
+| Method | Purpose | Throws |
+|--------|---------|--------|
+| `create(dto)` | Create with hashed password | `ConflictException` (email exists) |
+| `findAll(query)` | Search, sort, paginate | none |
+| `findOne(id)` | Get by ID | `NotFoundException` |
+| `findByEmail(email)` | Get by email, or `null` | none |
+| `update(id, dto)` | Partial update, re-hash password | `NotFoundException`, `ConflictException` |
+| `remove(id)` | Hard delete | `NotFoundException` |
+| `softDelete(id)` | Mark as deleted | `NotFoundException` |
+| `count()` | Total rows | none |
+| `findByAddress(address)` | Partial address match | none |
+| `findRecent(limit)` | Newest first | none |
+
+### Repository methods used
+
+| Method | Description |
+|--------|-------------|
+| `create(obj)` | Builds an entity instance (does not save). |
+| `save(entity)` | Inserts or updates. |
+| `findOne({ where })` | First match or `null`. |
+| `find({ where, order, take })` | Many results. |
+| `remove(entity)` | Hard delete of an entity instance. |
+| `softDelete(id)` | Sets the delete-date column. |
+| `count()` | Number of rows. |
+| `createQueryBuilder(alias)` | Starts a query builder. |
+| `ILike(pattern)` | Case-insensitive `LIKE` (PostgreSQL). |
+
 ---
 
-## Delivery Drivers Service with Advanced Features
+## Delivery drivers service
 
-**src/delivery-drivers/dto/create-driver.dto.ts**
+### DTOs
+
+`src/delivery-drivers/dto/create-driver.dto.ts`
 
 ```ts
 import { IsEmail, IsNotEmpty, IsString, IsOptional, MinLength, IsEnum } from 'class-validator';
@@ -522,42 +497,22 @@ export class CreateDriverDto {
 }
 ```
 
-**src/delivery-drivers/dto/update-driver.dto.ts**
+`src/delivery-drivers/dto/update-driver.dto.ts`
 
 ```ts
-import { IsEmail, IsString, IsOptional, IsBoolean, IsEnum } from 'class-validator';
+import { IsBoolean, IsOptional } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
 import { CreateDriverDto } from './create-driver.dto';
-import { VEHICLE_TYPE } from '../entities/delivery-driver.entity';
 
 export class UpdateDriverDto extends PartialType(CreateDriverDto) {
-  @IsString()
-  @IsOptional()
-  name?: string;
-
-  @IsEmail()
-  @IsOptional()
-  email?: string;
-
-  @IsString()
-  @IsOptional()
-  phone?: string;
-
-  @IsEnum(VEHICLE_TYPE)
-  @IsOptional()
-  vehicle_type?: VEHICLE_TYPE;
-
+  // Not part of CreateDriverDto, so it is declared here
   @IsBoolean()
   @IsOptional()
   is_available?: boolean;
-
-  @IsString()
-  @IsOptional()
-  profile_image_url?: string;
 }
 ```
 
-**src/delivery-drivers/dto/query-driver.dto.ts**
+`src/delivery-drivers/dto/query-driver.dto.ts`
 
 ```ts
 import { IsOptional, IsString, IsInt, Min, Max, IsIn, IsBoolean } from 'class-validator';
@@ -592,7 +547,7 @@ export class QueryDriverDto {
   @IsIn(['ASC', 'DESC'])
   sortOrder?: 'ASC' | 'DESC' = 'DESC';
 
-  // Filter by availability
+  // Filter by availability ("true" in the query string becomes boolean true)
   @IsOptional()
   @Transform(({ value }) => value === 'true' || value === true)
   @IsBoolean()
@@ -605,12 +560,14 @@ export class QueryDriverDto {
 }
 ```
 
-**src/delivery-drivers/delivery-drivers.service.ts**
+### Service
+
+`src/delivery-drivers/delivery-drivers.service.ts`
 
 ```ts
 import { Injectable, NotFoundException, ConflictException } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository, ILike } from 'typeorm';
+import { Repository } from 'typeorm';
 import { DeliveryDriver, VEHICLE_TYPE } from './entities/delivery-driver.entity';
 import { CreateDriverDto } from './dto/create-driver.dto';
 import { UpdateDriverDto } from './dto/update-driver.dto';
@@ -659,7 +616,7 @@ export class DeliveryDriversService {
     if (search) {
       queryBuilder.where(
         'driver.name ILIKE :search OR driver.email ILIKE :search OR driver.phone ILIKE :search',
-        { search: `%${search}%` }
+        { search: `%${search}%` },
       );
     }
 
@@ -673,10 +630,7 @@ export class DeliveryDriversService {
       queryBuilder.andWhere('driver.vehicle_type = :vehicle_type', { vehicle_type });
     }
 
-    // Sorting
     queryBuilder.orderBy(`driver.${sortBy}`, sortOrder);
-
-    // Pagination
     queryBuilder.skip(skip).take(limit);
 
     const [drivers, total] = await queryBuilder.getManyAndCount();
@@ -697,9 +651,7 @@ export class DeliveryDriversService {
   }
 
   async findOne(id: string): Promise<DeliveryDriver> {
-    const driver = await this.driverRepository.findOne({
-      where: { id },
-    });
+    const driver = await this.driverRepository.findOne({ where: { id } });
 
     if (!driver) {
       throw new NotFoundException(`Driver with ID ${id} not found`);
@@ -709,9 +661,7 @@ export class DeliveryDriversService {
   }
 
   async findByEmail(email: string): Promise<DeliveryDriver | null> {
-    return await this.driverRepository.findOne({
-      where: { email },
-    });
+    return await this.driverRepository.findOne({ where: { email } });
   }
 
   // ==================== UPDATE ====================
@@ -744,38 +694,22 @@ export class DeliveryDriversService {
 
   // ==================== DRIVER-SPECIFIC METHODS ====================
 
-  /**
-   * Toggle driver availability
-   * @param id - Driver ID
-   * @returns Updated driver
-   */
+  /** Toggle driver availability. */
   async toggleAvailability(id: string): Promise<DeliveryDriver> {
     const driver = await this.findOne(id);
     driver.is_available = !driver.is_available;
     return await this.driverRepository.save(driver);
   }
 
-  /**
-   * Find available drivers by vehicle type
-   * @param vehicle_type - Type of vehicle
-   * @returns Array of available drivers
-   */
+  /** Find available drivers by vehicle type (oldest first). */
   async findAvailableByVehicleType(vehicle_type: VEHICLE_TYPE): Promise<DeliveryDriver[]> {
     return await this.driverRepository.find({
-      where: {
-        is_available: true,
-        vehicle_type: vehicle_type,
-      },
-      order: {
-        created_at: 'ASC', // First in, first out
-      },
+      where: { is_available: true, vehicle_type },
+      order: { created_at: 'ASC' }, // first in, first out
     });
   }
 
-  /**
-   * Get statistics about drivers
-   * @returns Driver statistics
-   */
+  /** Driver statistics. */
   async getStatistics() {
     const total = await this.driverRepository.count();
     const available = await this.driverRepository.count({
@@ -791,20 +725,10 @@ export class DeliveryDriversService {
       .groupBy('driver.vehicle_type')
       .getRawMany();
 
-    return {
-      total,
-      available,
-      unavailable,
-      byVehicleType,
-    };
+    return { total, available, unavailable, byVehicleType };
   }
 
-  /**
-   * Bulk update driver availability
-   * @param ids - Array of driver IDs
-   * @param is_available - Availability status
-   * @returns Update result
-   */
+  /** Bulk update availability for many drivers. */
   async bulkUpdateAvailability(ids: string[], is_available: boolean) {
     const result = await this.driverRepository
       .createQueryBuilder()
@@ -813,39 +737,41 @@ export class DeliveryDriversService {
       .where('id IN (:...ids)', { ids })
       .execute();
 
-    return {
-      affected: result.affected,
-      is_available,
-    };
+    return { affected: result.affected, is_available };
   }
 }
 ```
 
+### Driver-specific methods
+
+| Method | Purpose |
+|--------|---------|
+| `toggleAvailability(id)` | Flip `is_available`. |
+| `findAvailableByVehicleType(type)` | Available drivers of one vehicle type, oldest first. |
+| `getStatistics()` | Totals, available/unavailable, and counts per vehicle type. |
+| `bulkUpdateAvailability(ids, flag)` | One `UPDATE ... WHERE id IN (...)` for many drivers. |
+
 ---
 
-## Pagination with nestjs-typeorm-paginate Package
+## Pagination with nestjs-typeorm-paginate
 
-The `nestjs-typeorm-paginate` package provides a clean, standardized way to handle pagination in NestJS with TypeORM.
-
-### Installation
+The `nestjs-typeorm-paginate` package gives a standard pagination response with little boilerplate.
 
 ```bash
 npm install nestjs-typeorm-paginate
 ```
 
-### Benefits
+| Benefit | Description |
+|---------|-------------|
+| Standard response | `items`, `meta` and `links` in a consistent shape. |
+| Less boilerplate | No manual skip/take/total math. |
+| Flexible | Works with a repository **or** a QueryBuilder. |
+| Automatic metadata | Page counts calculated for you. |
+| Links | Can generate first/previous/next/last URLs. |
 
-- **Standardized Response Format** - Consistent pagination response structure
-- **Less Boilerplate** - Reduces manual pagination code
-- **Works with Repository & QueryBuilder** - Flexible implementation
-- **Automatic Metadata** - Handles page calculation automatically
-- **Link Generation** - Can generate pagination links
+### Basic usage with a repository
 
----
-
-### Basic Usage with Repository
-
-**src/customers/customers.service.ts**
+`src/customers/customers.service.ts`
 
 ```ts
 import { Injectable } from '@nestjs/common';
@@ -861,31 +787,25 @@ export class CustomersService {
     private customerRepository: Repository<Customer>,
   ) {}
 
-  /**
-   * Simple pagination with repository
-   */
+  /** Simple pagination. */
   async findAll(options: IPaginationOptions): Promise<Pagination<Customer>> {
     return paginate<Customer>(this.customerRepository, options);
   }
 
-  /**
-   * Pagination with sorting
-   */
+  /** Pagination with sorting. */
   async findAllSorted(
     options: IPaginationOptions,
     sortBy: string = 'created_at',
-    sortOrder: 'ASC' | 'DESC' = 'DESC'
+    sortOrder: 'ASC' | 'DESC' = 'DESC',
   ): Promise<Pagination<Customer>> {
     return paginate<Customer>(this.customerRepository, options, {
-      order: {
-        [sortBy]: sortOrder,
-      },
+      order: { [sortBy]: sortOrder },
     });
   }
 }
 ```
 
-**Response Format:**
+### Response format
 
 ```json
 {
@@ -914,11 +834,20 @@ export class CustomersService {
 }
 ```
 
----
+| Field | Meaning |
+|-------|---------|
+| `items` | Entities on the current page. |
+| `meta.totalItems` | Total records in the database. |
+| `meta.itemCount` | Items on the current page. |
+| `meta.itemsPerPage` | The requested limit. |
+| `meta.totalPages` | Pages available. |
+| `meta.currentPage` | Current page number. |
+| `links.first` / `last` | First and last page URLs. |
+| `links.previous` / `next` | Adjacent page URLs (empty on the first / last page). |
 
-### Usage with QueryBuilder (Advanced)
+### Usage with QueryBuilder (advanced)
 
-**src/customers/dto/pagination-query.dto.ts**
+`src/customers/dto/pagination-query.dto.ts`
 
 ```ts
 import { IsOptional, IsInt, Min, Max, IsString, IsIn } from 'class-validator';
@@ -954,81 +883,58 @@ export class PaginationQueryDto {
 }
 ```
 
-**src/customers/customers.service.ts**
+`src/customers/customers.service.ts`
 
 ```ts
-import { Injectable } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
 import { paginate, Pagination, IPaginationOptions } from 'nestjs-typeorm-paginate';
-import { Customer } from './entities/customer.entity';
 import { PaginationQueryDto } from './dto/pagination-query.dto';
 
-@Injectable()
-export class CustomersService {
-  constructor(
-    @InjectRepository(Customer)
-    private customerRepository: Repository<Customer>,
-  ) {}
+/** Advanced pagination with search and sorting. */
+async findAllAdvanced(query: PaginationQueryDto): Promise<Pagination<Customer>> {
+  const { page, limit, search, sortBy, sortOrder } = query;
 
-  /**
-   * Advanced pagination with search and sorting using QueryBuilder
-   */
-  async findAllAdvanced(query: PaginationQueryDto): Promise<Pagination<Customer>> {
-    const { page, limit, search, sortBy, sortOrder } = query;
+  const queryBuilder = this.customerRepository.createQueryBuilder('customer');
 
-    const queryBuilder = this.customerRepository.createQueryBuilder('customer');
-
-    // Apply search filter
-    if (search) {
-      queryBuilder.where(
-        'customer.name ILIKE :search OR customer.email ILIKE :search OR customer.address ILIKE :search',
-        { search: `%${search}%` }
-      );
-    }
-
-    // Apply sorting
-    queryBuilder.orderBy(`customer.${sortBy}`, sortOrder);
-
-    // Paginate
-    return paginate<Customer>(queryBuilder, {
-      page,
-      limit,
-      route: '/customers', // Optional: for generating links
-    });
+  if (search) {
+    queryBuilder.where(
+      'customer.name ILIKE :search OR customer.email ILIKE :search OR customer.address ILIKE :search',
+      { search: `%${search}%` },
+    );
   }
 
-  /**
-   * Pagination with relations
-   */
-  async findAllWithOrders(options: IPaginationOptions): Promise<Pagination<Customer>> {
-    const queryBuilder = this.customerRepository
-      .createQueryBuilder('customer')
-      .leftJoinAndSelect('customer.orders', 'order')
-      .orderBy('customer.created_at', 'DESC');
+  queryBuilder.orderBy(`customer.${sortBy}`, sortOrder);
 
-    return paginate<Customer>(queryBuilder, options);
-  }
+  return paginate<Customer>(queryBuilder, {
+    page,
+    limit,
+    route: '/customers', // optional: used to generate links
+  });
+}
 
-  /**
-   * Pagination with custom select fields
-   */
-  async findAllMinimal(options: IPaginationOptions): Promise<Pagination<Partial<Customer>>> {
-    const queryBuilder = this.customerRepository
-      .createQueryBuilder('customer')
-      .select(['customer.id', 'customer.name', 'customer.email'])
-      .orderBy('customer.created_at', 'DESC');
+/** Pagination with relations. */
+async findAllWithOrders(options: IPaginationOptions): Promise<Pagination<Customer>> {
+  const queryBuilder = this.customerRepository
+    .createQueryBuilder('customer')
+    .leftJoinAndSelect('customer.orders', 'order')
+    .orderBy('customer.created_at', 'DESC');
 
-    return paginate(queryBuilder, options);
-  }
+  return paginate<Customer>(queryBuilder, options);
+}
+
+/** Pagination with a custom field selection. */
+async findAllMinimal(options: IPaginationOptions): Promise<Pagination<Partial<Customer>>> {
+  const queryBuilder = this.customerRepository
+    .createQueryBuilder('customer')
+    .select(['customer.id', 'customer.name', 'customer.email'])
+    .orderBy('customer.created_at', 'DESC');
+
+  return paginate(queryBuilder, options);
 }
 ```
 
----
+### Delivery drivers example
 
-### Delivery Drivers Service Example
-
-**src/delivery-drivers/dto/driver-pagination-query.dto.ts**
+`src/delivery-drivers/dto/driver-pagination-query.dto.ts`
 
 ```ts
 import { IsOptional, IsInt, Min, Max, IsString, IsIn, IsBoolean } from 'class-validator';
@@ -1074,14 +980,14 @@ export class DriverPaginationQueryDto {
 }
 ```
 
-**src/delivery-drivers/delivery-drivers.service.ts**
+`src/delivery-drivers/delivery-drivers.service.ts`
 
 ```ts
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { paginate, Pagination } from 'nestjs-typeorm-paginate';
-import { DeliveryDriver } from './entities/delivery-driver.entity';
+import { DeliveryDriver, VEHICLE_TYPE } from './entities/delivery-driver.entity';
 import { DriverPaginationQueryDto } from './dto/driver-pagination-query.dto';
 
 @Injectable()
@@ -1091,36 +997,29 @@ export class DeliveryDriversService {
     private driverRepository: Repository<DeliveryDriver>,
   ) {}
 
-  /**
-   * Paginate drivers with advanced filters
-   */
+  /** Paginate drivers with filters. */
   async findAll(query: DriverPaginationQueryDto): Promise<Pagination<DeliveryDriver>> {
     const { page, limit, search, is_available, vehicle_type, sortBy, sortOrder } = query;
 
     const queryBuilder = this.driverRepository.createQueryBuilder('driver');
 
-    // Search filter
     if (search) {
       queryBuilder.where(
         'driver.name ILIKE :search OR driver.email ILIKE :search OR driver.phone ILIKE :search',
-        { search: `%${search}%` }
+        { search: `%${search}%` },
       );
     }
 
-    // Availability filter
     if (is_available !== undefined) {
       queryBuilder.andWhere('driver.is_available = :is_available', { is_available });
     }
 
-    // Vehicle type filter
     if (vehicle_type) {
       queryBuilder.andWhere('driver.vehicle_type = :vehicle_type', { vehicle_type });
     }
 
-    // Sorting
     queryBuilder.orderBy(`driver.${sortBy}`, sortOrder);
 
-    // Paginate
     return paginate<DeliveryDriver>(queryBuilder, {
       page,
       limit,
@@ -1128,13 +1027,11 @@ export class DeliveryDriversService {
     });
   }
 
-  /**
-   * Find available drivers paginated
-   */
+  /** Available drivers, paginated. */
   async findAvailable(
     page: number = 1,
     limit: number = 10,
-    vehicle_type?: VEHICLE_TYPE
+    vehicle_type?: VEHICLE_TYPE,
   ): Promise<Pagination<DeliveryDriver>> {
     const queryBuilder = this.driverRepository
       .createQueryBuilder('driver')
@@ -1151,11 +1048,9 @@ export class DeliveryDriversService {
 }
 ```
 
----
+### Controllers
 
-### Controller Implementation
-
-**src/customers/customers.controller.ts**
+`src/customers/customers.controller.ts`
 
 ```ts
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
@@ -1178,14 +1073,14 @@ export class CustomersController {
   @Get('minimal')
   async findAllMinimal(
     @Query('page') page: number = 1,
-    @Query('limit') limit: number = 10
+    @Query('limit') limit: number = 10,
   ): Promise<Pagination<Partial<Customer>>> {
     return this.customersService.findAllMinimal({ page, limit });
   }
 }
 ```
 
-**src/delivery-drivers/delivery-drivers.controller.ts**
+`src/delivery-drivers/delivery-drivers.controller.ts`
 
 ```ts
 import { Controller, Get, Query, UseGuards } from '@nestjs/common';
@@ -1209,45 +1104,26 @@ export class DeliveryDriversController {
   async findAvailable(
     @Query('page') page: number = 1,
     @Query('limit') limit: number = 10,
-    @Query('vehicle_type') vehicle_type?: string
+    @Query('vehicle_type') vehicle_type?: string,
   ): Promise<Pagination<DeliveryDriver>> {
     return this.driversService.findAvailable(page, limit, vehicle_type as any);
   }
 }
 ```
 
----
+> Individual `@Query('page')` values arrive as strings. Prefer the DTO approach (`@Query() query: Dto` with `@Type(() => Number)`), or add `ParseIntPipe`.
 
-### API Usage Examples
+### API examples
 
-**1. Basic Pagination:**
-```
-GET /customers?page=1&limit=10
-```
+| Request | Purpose |
+|---------|---------|
+| `GET /customers?page=1&limit=10` | Basic pagination |
+| `GET /customers?page=1&limit=10&search=john` | With search |
+| `GET /customers?page=1&limit=10&sortBy=name&sortOrder=ASC` | With sorting |
+| `GET /delivery-drivers?page=2&limit=20&is_available=true&vehicle_type=bike&sortBy=created_at&sortOrder=DESC` | Complex query |
+| `GET /delivery-drivers?search=john&is_available=true` | Search among available drivers |
 
-**2. With Search:**
-```
-GET /customers?page=1&limit=10&search=john
-```
-
-**3. With Sorting:**
-```
-GET /customers?page=1&limit=10&sortBy=name&sortOrder=ASC
-```
-
-**4. Complex Query:**
-```
-GET /delivery-drivers?page=2&limit=20&is_available=true&vehicle_type=bike&sortBy=created_at&sortOrder=DESC
-```
-
-**5. Search Available Drivers:**
-```
-GET /delivery-drivers?search=john&is_available=true
-```
-
----
-
-### Custom Pagination Options
+### Custom pagination options
 
 ```ts
 import { IPaginationOptions } from 'nestjs-typeorm-paginate';
@@ -1255,162 +1131,29 @@ import { IPaginationOptions } from 'nestjs-typeorm-paginate';
 const customOptions: IPaginationOptions = {
   page: 1,
   limit: 10,
-  route: 'http://example.com/customers', // For link generation
-  cacheQueries: true, // Enable query caching
+  route: 'http://example.com/customers', // for link generation
+  cacheQueries: true,                    // enable query caching
 };
 
 await paginate<Customer>(repository, customOptions);
 ```
 
----
-
-### Pagination Metadata Explained
+### Manual vs package
 
 ```ts
-{
-  "items": [...],          // Array of entities
-  "meta": {
-    "totalItems": 100,     // Total records in database
-    "itemCount": 10,       // Items in current page
-    "itemsPerPage": 10,    // Requested limit
-    "totalPages": 10,      // Total pages available
-    "currentPage": 1       // Current page number
-  },
-  "links": {
-    "first": "...",        // First page URL
-    "previous": "...",     // Previous page URL (empty if first page)
-    "next": "...",         // Next page URL (empty if last page)
-    "last": "..."          // Last page URL
-  }
-}
-```
-
----
-
-### Understanding QueryBuilder Aliases vs Table Names
-
-**IMPORTANT:** The string you pass to `createQueryBuilder()` is an **alias**, NOT the table name!
-
-```ts
-// Entity definition - THIS defines the table name
-@Entity('customers')  // ← Table name in database
-export class Customer {
-  // ...
-}
-
-// QueryBuilder - THIS is just an alias
-const queryBuilder = this.customerRepository.createQueryBuilder('customer');
-//                                                                 ^^^^^^^^
-//                                                            This is an ALIAS
-
-// You use the alias to reference the entity in the query
-queryBuilder.where('customer.name = :name', { name: 'John' });
-//                  ^^^^^^^^ Using the alias
-```
-
-**How It Works:**
-
-| Component | Purpose | Example |
-|-----------|---------|---------|
-| `@Entity('customers')` | **Table name** in database | Table: `customers` |
-| `.createQueryBuilder('customer')` | **Alias** for queries | Alias: `customer` |
-| `customer.name` | Reference column using alias | Column: `name` |
-
-**Real Example:**
-
-```ts
-// Entity with table name
-@Entity('delivery_drivers')  // Table name: delivery_drivers
-export class DeliveryDriver {
-  @Column()
-  name: string;
-}
-
-// Service using QueryBuilder
-@Injectable()
-export class DeliveryDriversService {
-  async findAll() {
-    // 'driver' is just an alias - you can name it anything!
-    const queryBuilder = this.driverRepository.createQueryBuilder('driver');
-    
-    // Generated SQL will use the actual table name
-    // SELECT * FROM delivery_drivers WHERE driver.name = 'John'
-    queryBuilder.where('driver.name = :name', { name: 'John' });
-    
-    return queryBuilder.getMany();
-  }
-}
-```
-
-**Different Alias Examples:**
-
-```ts
-// All of these are valid - alias can be anything
-this.customerRepository.createQueryBuilder('customer');  // ✅ Common
-this.customerRepository.createQueryBuilder('c');         // ✅ Short
-this.customerRepository.createQueryBuilder('cust');      // ✅ Abbreviated
-this.customerRepository.createQueryBuilder('user');      // ✅ Works but confusing!
-
-// The alias is what you use in your query methods
-queryBuilder.where('customer.email = :email');  // Using 'customer' alias
-queryBuilder.where('c.email = :email');        // Using 'c' alias
-```
-
-**With Joins:**
-
-```ts
-const queryBuilder = this.customerRepository
-  .createQueryBuilder('customer')  // Main entity alias
-  .leftJoinAndSelect('customer.orders', 'order')  // Related entity alias
-  .where('customer.name = :name', { name: 'John' })
-  .andWhere('order.total > :amount', { amount: 100 });
-
-// Generated SQL:
-// SELECT * FROM customers AS customer
-// LEFT JOIN orders AS order ON order.customer_id = customer.id
-// WHERE customer.name = 'John' AND order.total > 100
-```
-
-**Best Practices:**
-
-1. **Use descriptive aliases** - `customer` is better than `c`
-2. **Be consistent** - Use the same alias pattern throughout your codebase
-3. **Match entity name** - If entity is `Customer`, alias could be `customer` (lowercase)
-4. **Avoid confusion** - Don't use misleading aliases
-
-**Common Pattern:**
-
-```ts
-// Singular lowercase of entity name
-Customer entity → 'customer' alias
-DeliveryDriver entity → 'driver' alias (or 'deliveryDriver')
-Order entity → 'order' alias
-```
-
----
-
-### Comparison: Manual vs Package
-
-**Manual Pagination:**
-```ts
-// More code, manual calculations
+// Manual: more code, manual calculations
 const skip = (page - 1) * limit;
 const [data, total] = await repository.findAndCount({ skip, take: limit });
 const totalPages = Math.ceil(total / limit);
 return { data, meta: { total, page, limit, totalPages } };
-```
 
-**With nestjs-typeorm-paginate:**
-```ts
-// Clean, automatic calculations
+// Package: automatic
 return paginate<Customer>(repository, { page, limit });
 ```
 
----
+### Custom response serialization
 
-### Advanced: Custom Response Serialization
-
-**src/common/serializers/pagination.serializer.ts**
+`src/common/serializers/pagination.serializer.ts`
 
 ```ts
 import { Pagination } from 'nestjs-typeorm-paginate';
@@ -1419,9 +1162,7 @@ export class PaginationSerializer {
   static serialize<T>(pagination: Pagination<T>, transformer?: (item: T) => any) {
     return {
       success: true,
-      data: transformer 
-        ? pagination.items.map(transformer) 
-        : pagination.items,
+      data: transformer ? pagination.items.map(transformer) : pagination.items,
       pagination: {
         total: pagination.meta.totalItems,
         count: pagination.meta.itemCount,
@@ -1436,77 +1177,97 @@ export class PaginationSerializer {
 }
 ```
 
-**Usage:**
+Usage:
 
 ```ts
 @Get()
 async findAll(@Query() query: PaginationQueryDto) {
   const pagination = await this.customersService.findAllAdvanced(query);
-  
+
   return PaginationSerializer.serialize(pagination, (customer) => ({
     id: customer.id,
     name: customer.name,
     email: customer.email,
-    // Exclude password and other sensitive fields
+    // password and other sensitive fields are left out
   }));
 }
 ```
 
----
+### Performance tips
 
-### Performance Tips
-
-1. **Use Select to Limit Fields:**
-```ts
-queryBuilder.select(['driver.id', 'driver.name', 'driver.is_available']);
-```
-
-2. **Add Indexes:**
-```ts
-@Entity('customers')
-@Index(['email'])
-@Index(['created_at'])
-export class Customer {
-  // ...
-}
-```
-
-3. **Limit Max Page Size:**
-```ts
-@Max(100) // Prevent users from requesting 1000+ items
-limit?: number = 10;
-```
-
-4. **Use Query Caching:**
-```ts
-return paginate<Customer>(queryBuilder, {
-  page,
-  limit,
-  cacheQueries: true,
-});
-```
+| Tip | Example |
+|-----|---------|
+| Select only needed fields | `queryBuilder.select(['driver.id', 'driver.name', 'driver.is_available'])` |
+| Add indexes on filtered/sorted columns | `@Entity('customers') @Index(['email']) @Index(['created_at'])` |
+| Cap the page size | `@Max(100) limit?: number = 10;` |
+| Cache queries | `paginate(queryBuilder, { page, limit, cacheQueries: true })` |
 
 ---
 
-## Pagination Patterns
+## QueryBuilder aliases vs table names
 
-### 1. Offset-Based Pagination (Most Common)
+The string passed to `createQueryBuilder()` is an **alias**, not the table name.
 
-**Pros:**
-- Easy to implement
-- Jump to any page
-- Simple UI (page numbers)
+```ts
+@Entity('customers')   // table name in the database
+export class Customer {}
 
-**Cons:**
-- Performance degrades with large offsets
-- Data inconsistency if records are added/deleted during pagination
+const queryBuilder = this.customerRepository.createQueryBuilder('customer');
+//                                                               ^^^^^^^^ alias only
+
+queryBuilder.where('customer.name = :name', { name: 'John' }); // use the alias in the query
+```
+
+| Component | Purpose | Example |
+|-----------|---------|---------|
+| `@Entity('customers')` | Table name | Table `customers` |
+| `.createQueryBuilder('customer')` | Alias for the query | Alias `customer` |
+| `customer.name` | Column reference through the alias | Column `name` |
+
+The alias can be anything. The generated SQL still uses the real table name.
+
+```ts
+this.customerRepository.createQueryBuilder('customer'); // common
+this.customerRepository.createQueryBuilder('c');        // short
+this.customerRepository.createQueryBuilder('user');     // works, but confusing
+
+// With joins: each joined entity gets its own alias
+const queryBuilder = this.customerRepository
+  .createQueryBuilder('customer')                    // main entity alias
+  .leftJoinAndSelect('customer.orders', 'order')     // related entity alias
+  .where('customer.name = :name', { name: 'John' })
+  .andWhere('order.total > :amount', { amount: 100 });
+
+// SELECT ... FROM customers customer
+// LEFT JOIN orders order ON order.customer_id = customer.id
+// WHERE customer.name = 'John' AND order.total > 100
+```
+
+**Alias conventions**
+
+1. Use descriptive aliases (`customer`, not `c`).
+2. Be consistent across the codebase.
+3. Match the entity name in lowercase: `Customer` to `customer`, `DeliveryDriver` to `driver` (or `deliveryDriver`), `Order` to `order`.
+4. Avoid misleading aliases.
+
+---
+
+## Pagination patterns
+
+| Pattern | Pros | Cons |
+|---------|------|------|
+| **Offset-based** | Easy, jump to any page, simple UI | Slow with large offsets; inconsistent if rows change mid-browse |
+| **Cursor-based** | Stable performance, no skipped/duplicated rows, good for infinite scroll | Cannot jump to a page; more complex |
+| **Page-based with QueryBuilder** | Most flexible (search, filters, sort) | More code |
+
+### 1. Offset-based (most common)
 
 ```ts
 async findAllWithPagination(page: number = 1, limit: number = 10) {
   const skip = (page - 1) * limit;
 
   const [data, total] = await this.repository.findAndCount({
-    skip: skip,
+    skip,
     take: limit,
     order: { created_at: 'DESC' },
   });
@@ -1525,52 +1286,37 @@ async findAllWithPagination(page: number = 1, limit: number = 10) {
 }
 ```
 
-### 2. Cursor-Based Pagination (Better for Infinite Scroll)
-
-**Pros:**
-- Consistent performance
-- No data duplication/skipping
-- Good for real-time data
-
-**Cons:**
-- Can't jump to specific page
-- More complex implementation
+### 2. Cursor-based (infinite scroll)
 
 ```ts
 async findAllWithCursor(cursor?: string, limit: number = 10) {
   const queryBuilder = this.repository.createQueryBuilder('entity');
 
-  // If cursor is provided, fetch records after it
+  // If a cursor is given, fetch records after it
   if (cursor) {
     queryBuilder.where('entity.id > :cursor', { cursor });
   }
 
   queryBuilder
     .orderBy('entity.id', 'ASC')
-    .take(limit + 1); // Fetch one extra to check if there's a next page
+    .take(limit + 1); // one extra row tells us whether a next page exists
 
   const data = await queryBuilder.getMany();
   const hasNextPage = data.length > limit;
 
-  // Remove the extra item if it exists
   if (hasNextPage) {
-    data.pop();
+    data.pop(); // remove the extra row
   }
 
   const nextCursor = hasNextPage ? data[data.length - 1].id : null;
 
-  return {
-    data,
-    meta: {
-      nextCursor,
-      hasNextPage,
-      limit,
-    },
-  };
+  return { data, meta: { nextCursor, hasNextPage, limit } };
 }
 ```
 
-### 3. Page-Based with Query Builder (Most Flexible)
+> The cursor column must be **ordered**. Random UUIDs (`@PrimaryGeneratedColumn('uuid')`) do not sort by creation time, so `id > cursor` skips and repeats rows. Use an auto-increment id or a `created_at` column (ideally combined with `id` as a tie-breaker).
+
+### 3. Page-based with QueryBuilder (most flexible)
 
 ```ts
 async findAllAdvanced(queryDto: QueryDto) {
@@ -1584,17 +1330,16 @@ async findAllAdvanced(queryDto: QueryDto) {
   if (search) {
     queryBuilder.where(
       'entity.name ILIKE :search OR entity.email ILIKE :search',
-      { search: `%${search}%` }
+      { search: `%${search}%` },
     );
   }
 
-  // Dynamic sorting
+  // Dynamic sorting (whitelisted)
   const allowedSortFields = ['name', 'email', 'created_at'];
   if (allowedSortFields.includes(sortBy)) {
     queryBuilder.orderBy(`entity.${sortBy}`, sortOrder);
   }
 
-  // Pagination
   queryBuilder.skip(skip).take(limit);
 
   const [data, total] = await queryBuilder.getManyAndCount();
@@ -1615,69 +1360,59 @@ async findAllAdvanced(queryDto: QueryDto) {
 
 ---
 
-## Sorting Patterns
+## Sorting patterns
 
-### 1. Simple Sorting
+### 1. Simple sorting
 
 ```ts
-// Single field, single direction
+async findAll() {
+  return await this.repository.find({ order: { created_at: 'DESC' } });
+}
+```
+
+### 2. Multiple fields
+
+```ts
 async findAll() {
   return await this.repository.find({
     order: {
-      created_at: 'DESC',
+      is_available: 'DESC', // available first
+      created_at: 'ASC',    // then oldest first
     },
   });
 }
 ```
 
-### 2. Multiple Field Sorting
+### 3. Dynamic sorting (query parameter)
 
-```ts
-// Multiple fields with different directions
-async findAll() {
-  return await this.repository.find({
-    order: {
-      is_available: 'DESC', // Available first
-      created_at: 'ASC',    // Then oldest first
-    },
-  });
-}
-```
-
-### 3. Dynamic Sorting (Query Parameter)
+Always whitelist sortable fields.
 
 ```ts
 async findAll(sortBy: string = 'created_at', sortOrder: 'ASC' | 'DESC' = 'DESC') {
-  // Whitelist allowed sort fields (security!)
   const allowedSortFields = ['name', 'email', 'created_at', 'is_available'];
-  
+
   if (!allowedSortFields.includes(sortBy)) {
-    sortBy = 'created_at'; // Default fallback
+    sortBy = 'created_at'; // default fallback
   }
 
-  return await this.repository.find({
-    order: {
-      [sortBy]: sortOrder,
-    },
-  });
+  return await this.repository.find({ order: { [sortBy]: sortOrder } });
 }
 ```
 
-### 4. Complex Sorting with Relations
+### 4. Sorting with relations
 
 ```ts
-// Sort by related entity field
 async findAllWithRelations() {
   return await this.repository
     .createQueryBuilder('customer')
     .leftJoinAndSelect('customer.orders', 'order')
-    .orderBy('order.total', 'DESC') // Sort by order total
-    .addOrderBy('customer.name', 'ASC') // Then by customer name
+    .orderBy('order.total', 'DESC')      // by order total
+    .addOrderBy('customer.name', 'ASC')  // then by customer name
     .getMany();
 }
 ```
 
-### 5. Case-Insensitive Sorting
+### 5. Case-insensitive sorting
 
 ```ts
 async findAllCaseInsensitive() {
@@ -1690,9 +1425,9 @@ async findAllCaseInsensitive() {
 
 ---
 
-## Advanced Query Patterns
+## Advanced query patterns
 
-### 1. Search with Multiple Fields
+### Search across multiple fields
 
 ```ts
 async search(searchTerm: string) {
@@ -1700,13 +1435,13 @@ async search(searchTerm: string) {
     .createQueryBuilder('customer')
     .where(
       'customer.name ILIKE :term OR customer.email ILIKE :term OR customer.address ILIKE :term',
-      { term: `%${searchTerm}%` }
+      { term: `%${searchTerm}%` },
     )
     .getMany();
 }
 ```
 
-### 2. Date Range Filtering
+### Date range filtering
 
 ```ts
 async findByDateRange(startDate: Date, endDate: Date) {
@@ -1720,13 +1455,12 @@ async findByDateRange(startDate: Date, endDate: Date) {
 }
 ```
 
-### 3. Complex Filtering
+### Conditional filters
 
 ```ts
 async findWithFilters(filters: any) {
   const queryBuilder = this.repository.createQueryBuilder('driver');
 
-  // Apply filters conditionally
   if (filters.is_available !== undefined) {
     queryBuilder.andWhere('driver.is_available = :is_available', {
       is_available: filters.is_available,
@@ -1749,34 +1483,30 @@ async findWithFilters(filters: any) {
 }
 ```
 
-### 4. Aggregation Queries
+### Aggregation
 
 ```ts
 async getAggregatedData() {
-  const result = await this.repository
+  return await this.repository
     .createQueryBuilder('driver')
     .select('driver.vehicle_type', 'vehicle_type')
     .addSelect('COUNT(*)', 'total')
     .addSelect('COUNT(CASE WHEN driver.is_available = true THEN 1 END)', 'available')
     .groupBy('driver.vehicle_type')
     .getRawMany();
-
-  return result;
 }
 ```
 
 ---
 
-## Service Best Practices
+## Service best practices
 
-### 1. Error Handling
+### 1. Error handling
 
 ```ts
 async findOne(id: string): Promise<Customer> {
   try {
-    const customer = await this.customerRepository.findOne({
-      where: { id },
-    });
+    const customer = await this.customerRepository.findOne({ where: { id } });
 
     if (!customer) {
       throw new NotFoundException(`Customer with ID ${id} not found`);
@@ -1792,7 +1522,11 @@ async findOne(id: string): Promise<Customer> {
 }
 ```
 
-### 2. Transaction Management
+For domain-specific errors with a consistent response format, see `custom-exception.md`.
+
+### 2. Transactions
+
+Use a `QueryRunner` for multi-step operations that must succeed or fail together.
 
 ```ts
 import { DataSource } from 'typeorm';
@@ -1812,14 +1546,12 @@ export class CustomersService {
     await queryRunner.startTransaction();
 
     try {
-      // Create customer
       const customer = queryRunner.manager.create(Customer, customerData);
       await queryRunner.manager.save(customer);
 
-      // Create order
       const order = queryRunner.manager.create(Order, {
         ...orderData,
-        customer: customer,
+        customer,
       });
       await queryRunner.manager.save(order);
 
@@ -1835,6 +1567,13 @@ export class CustomersService {
   }
 }
 ```
+
+| Call | Description |
+|------|-------------|
+| `createQueryRunner()` | Gets a dedicated connection. |
+| `startTransaction()` | Begins the transaction. |
+| `commitTransaction()` / `rollbackTransaction()` | Persist or undo everything. |
+| `release()` | Always release the connection (in `finally`). |
 
 ### 3. Caching
 
@@ -1860,17 +1599,15 @@ export class CustomersService {
       return cached;
     }
 
-    // If not in cache, fetch from database
-    const customer = await this.customerRepository.findOne({
-      where: { id },
-    });
+    // Not cached: read from the database
+    const customer = await this.customerRepository.findOne({ where: { id } });
 
     if (!customer) {
       throw new NotFoundException(`Customer with ID ${id} not found`);
     }
 
-    // Store in cache
-    await this.cacheManager.set(cacheKey, customer, 300); // 5 minutes TTL
+    // Store in cache (TTL)
+    await this.cacheManager.set(cacheKey, customer, 300);
 
     return customer;
   }
@@ -1880,13 +1617,15 @@ export class CustomersService {
     Object.assign(customer, updateDto);
     const updated = await this.customerRepository.save(customer);
 
-    // Invalidate cache
+    // Invalidate the cache
     await this.cacheManager.del(`customer:${id}`);
 
     return updated;
   }
 }
 ```
+
+> The TTL unit depends on the `cache-manager` version: seconds in v4 and below, **milliseconds** in v5+. `300` above means 5 minutes in seconds; for v5+ use `300_000`.
 
 ### 4. Logging
 
@@ -1907,7 +1646,7 @@ export class CustomersService {
 
     try {
       const customer = await this.customerRepository.save(
-        this.customerRepository.create(createCustomerDto)
+        this.customerRepository.create(createCustomerDto),
       );
 
       this.logger.log(`Customer created successfully: ${customer.id}`);
@@ -1920,7 +1659,7 @@ export class CustomersService {
 }
 ```
 
-### 5. Validation
+### 5. Validation inside services
 
 ```ts
 async update(id: string, updateDto: UpdateCustomerDto): Promise<Customer> {
@@ -1931,7 +1670,7 @@ async update(id: string, updateDto: UpdateCustomerDto): Promise<Customer> {
 
   const customer = await this.findOne(id);
 
-  // Validate email uniqueness if being updated
+  // Email uniqueness if being updated
   if (updateDto.email && updateDto.email !== customer.email) {
     const existing = await this.findByEmail(updateDto.email);
     if (existing) {
@@ -1949,11 +1688,11 @@ private isValidUUID(id: string): boolean {
 }
 ```
 
+> A `ParseUUIDPipe` on the controller parameter does the same check before the service is called.
+
 ---
 
-## Service Testing
-
-### Unit Test Example
+## Service testing
 
 ```ts
 import { Test, TestingModule } from '@nestjs/testing';
@@ -2012,9 +1751,7 @@ describe('CustomersService', () => {
       const result = await service.findOne('123');
 
       expect(result).toEqual(mockCustomer);
-      expect(mockRepository.findOne).toHaveBeenCalledWith({
-        where: { id: '123' },
-      });
+      expect(mockRepository.findOne).toHaveBeenCalledWith({ where: { id: '123' } });
     });
 
     it('should throw NotFoundException when customer not found', async () => {
@@ -2045,34 +1782,53 @@ describe('CustomersService', () => {
 });
 ```
 
----
+| Piece | Purpose |
+|-------|---------|
+| `Test.createTestingModule()` | Builds an isolated module for the test. |
+| `getRepositoryToken(Customer)` | The DI token `@InjectRepository(Customer)` resolves to. |
+| `useValue: mockRepository` | Replaces the real repository with Jest mocks. |
+| `mockResolvedValue()` / `mockReturnValue()` | Control what each mocked method returns. |
 
-## Key Takeaways
-
-1. **Services = Business Logic** - Keep controllers thin, services fat
-2. **Use DTOs** - Always validate input with DTOs
-3. **Error Handling** - Use proper HTTP exceptions (NotFoundException, ConflictException)
-4. **Pagination** - Always paginate list endpoints
-5. **Sorting** - Make sorting dynamic and flexible
-6. **Filtering** - Use QueryBuilder for complex filters
-7. **Transactions** - Use for multi-step operations
-8. **Caching** - Cache frequently accessed data
-9. **Logging** - Log important operations
-10. **Testing** - Unit test all service methods
+> `create()` first looks up the email with `findOne`, so in the `create` test also set `mockRepository.findOne.mockResolvedValue(null)`; otherwise the leftover mock value from an earlier test can make it throw `ConflictException`.
 
 ---
 
-## Common Patterns Summary
+## Key takeaways
 
-| Pattern | Use Case | Example |
+1. **Services hold business logic.** Keep controllers thin.
+2. **Use DTOs** to validate all input.
+3. **Throw proper HTTP exceptions** (`NotFoundException`, `ConflictException`).
+4. **Paginate every list endpoint.**
+5. **Whitelist sort fields**; never pass raw user input into `orderBy`.
+6. **Use QueryBuilder** for complex filters.
+7. **Use transactions** for multi-step operations.
+8. **Cache** frequently read data and invalidate on write.
+9. **Log** important operations.
+10. **Unit test** every service method.
+
+## Common patterns summary
+
+| Pattern | Use case | Example |
 |---------|----------|---------|
-| **Offset Pagination** | Standard list views | `skip: (page-1)*limit` |
-| **Cursor Pagination** | Infinite scroll | `where: { id: MoreThan(cursor) }` |
-| **Dynamic Sorting** | Flexible ordering | `order: { [sortBy]: sortOrder }` |
-| **Search/Filter** | Find records | `where: { name: ILike('%term%') }` |
-| **Bulk Operations** | Update many records | `update().where('id IN (:...ids)')` |
-| **Aggregation** | Statistics | `groupBy().count()` |
-| **Transactions** | Atomic operations | `queryRunner.startTransaction()` |
-| **Caching** | Performance | `cacheManager.get/set()` |
+| Offset pagination | Standard list views | `skip: (page - 1) * limit` |
+| Cursor pagination | Infinite scroll | `where: { id: MoreThan(cursor) }` |
+| Dynamic sorting | Flexible ordering | `order: { [sortBy]: sortOrder }` |
+| Search / filter | Find records | `where: { name: ILike('%term%') }` |
+| Bulk operations | Update many records | `update().where('id IN (:...ids)')` |
+| Aggregation | Statistics | `groupBy().count()` |
+| Transactions | Atomic operations | `queryRunner.startTransaction()` |
+| Caching | Performance | `cacheManager.get/set()` |
 
-This service layer pattern provides a solid foundation for building scalable NestJS applications!
+---
+
+## Common mistakes
+
+| Mistake | Why it matters | Fix |
+|---|---|---|
+| `findOne({ where: { id } })` with `id` undefined | TypeORM drops the condition and returns the **first row** | Validate the ID (`ParseUUIDPipe`) before querying |
+| Passing user input straight into `orderBy` | SQL injection through the sort field | Whitelist sort fields (`@IsIn([...])`) |
+| Returning the entity with its password hash | Leaks the hash in the response | Return a response DTO or use `@Exclude()` with `ClassSerializerInterceptor` |
+| Forgetting `await` on `save()` | The write may not finish before the response | Always `await` repository calls |
+| Not releasing a `QueryRunner` | Leaks database connections | Release it in `finally` |
+| Loading relations inside a loop | N+1 queries | Use `leftJoinAndSelect` or `relations` in one query |
+| Cursor pagination on a random UUID column | Rows are skipped or repeated | Order by an auto-increment id or `created_at` |
